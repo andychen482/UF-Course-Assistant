@@ -67,29 +67,26 @@ def run_initial():
             current = start_date
 
         while current < end_date:
-            month_end = min(
-                (current.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1),
-                end_date
-            )
+            day_end = current
 
             try:
                 run_scraper(
                     flair,
                     since=current.isoformat(),
-                    until=month_end.isoformat()
+                    until=day_end.isoformat()
                 )
 
                 state.setdefault(SUBREDDIT, {})[flair] = (
-                    month_end + timedelta(days=1)
+                    day_end + timedelta(days=1)
                 ).isoformat()
                 save_state(INITIAL_STATE, state)
 
             except subprocess.CalledProcessError:
-                logging.error("Failed at %s → %s for flair %s", current, month_end, flair)
+                logging.error("Failed at %s for flair %s", current, flair)
                 save_state(INITIAL_STATE, state)
                 return
 
-            current = month_end + timedelta(days=1)
+            current += timedelta(days=1)
 
     logging.info("Initial scrape complete.")
 
