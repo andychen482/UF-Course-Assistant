@@ -15,7 +15,7 @@ STATE_DIR = "reddit_scrapes/state"
 INITIAL_STATE = os.path.join(STATE_DIR, "initial_progress.json")
 DAILY_STATE = os.path.join(STATE_DIR, "daily_progress.json")
 
-RATE_LIMIT = "2.0"
+RATE_LIMIT = "5.0"
 # ----------------------------
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -57,7 +57,8 @@ def run_initial():
     state = load_state(INITIAL_STATE)
 
     end_date = datetime.utcnow().date()
-    start_date = end_date - timedelta(days=365 * 3)
+    # choose start date
+    start_date = end_date - timedelta(days=50)
 
     for flair in FLAIRS:
         flair_start = state.get(SUBREDDIT, {}).get(flair)
