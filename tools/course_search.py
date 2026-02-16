@@ -1,8 +1,9 @@
 """
 LangChain tools for searching UF courses and retrieving section details.
 
-Provides two tools:
-  - search_courses: Search by course code or name, returns compact summaries.
+Provides three tools:
+  - search_courses_by_code: Search by course code (exact or prefix).
+  - search_courses_by_title: Search by course name / keyword.
   - get_course_sections: Get full section details for a specific course code.
 """
 
@@ -27,7 +28,7 @@ _DELIVERY_MODE = {
 # ---------------------------------------------------------------------------
 
 def _format_course_summary(course: dict, index: int) -> str:
-    """Format a single course for the search_courses result list."""
+    """Format a single course for the search result list."""
     code_spaced = course.get("codeWithSpace", course["code"])
     name = course["name"]
     description = course.get("description", "").strip()
@@ -144,47 +145,57 @@ def _format_section(section: dict) -> str:
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# LangChain Tools
-# ---------------------------------------------------------------------------
-
-@tool
-def search_courses(query: str) -> str:
-    """Search for UF courses by course code or course name.
-
-    Use this tool to find courses when you know a course code (e.g. "COP3530",
-    "COP", "MAC 2311") or a course name keyword (e.g. "Data Structures",
-    "Calculus"). Returns a summary list of matching courses with their code,
-    name, description, credits, and number of sections. Use get_course_sections
-    to get full section details for a specific course.
-
-    Args:
-        query: A course code (e.g. "COP3530", "COP") or course name
-               (e.g. "Data Structures"). Spaces in codes are optional.
-    """
-    # Normalize: remove spaces so "COP 3530" becomes "COP3530" for code search
-    query_normalized = query.strip().replace(" ", "")
-
-    # Try code-based search first (exact then prefix)
-    results = search_by_code(query_normalized, limit=10)
-
-    # If no code matches, try name search with the original query
+def _format_results(results: list[dict], query: str) -> str:
+    """Format a list of course results into a single string."""
     if not results:
-        results = search_by_name(query.strip(), limit=10)
-
-    if not results:
-        return f'No courses found matching "{query}". Try a different course code or name.'
+        return f'No courses found matching "{query}". Try a different search.'
 
     formatted = [_format_course_summary(c, i + 1) for i, c in enumerate(results)]
     header = f'Found {len(results)} course(s) matching "{query}":\n'
     return header + "\n\n".join(formatted)
 
 
+# ---------------------------------------------------------------------------
+# LangChain Tools
+# ---------------------------------------------------------------------------
+
+@tool
+def search_courses_by_code(course_code: str) -> str:
+    """Search for UF courses by course code.
+
+    Use this when the student mentions a specific course code or department
+    prefix. Supports exact codes (e.g. "COP3530") and prefix searches
+    (e.g. "COP" returns all COP courses). Spaces are optional.
+
+    Args:
+        course_code: A full or partial course code (e.g. "COP3530", "COP",
+                     "MAC 2311").
+    """
+    code = course_code.strip().replace(" ", "")
+    results = search_by_code(code, limit=10)
+    return _format_results(results, course_code)
+
+
+@tool
+def search_courses_by_title(title: str) -> str:
+    """Search for UF courses by course name or topic keyword.
+
+    Use this when the student describes a subject or topic rather than a
+    specific course code. Searches course titles for the given keyword(s).
+
+    Args:
+        title: A course name or keyword (e.g. "Data Structures", "Calculus",
+               "Machine Learning", "Organic Chemistry").
+    """
+    results = search_by_name(title.strip(), limit=10)
+    return _format_results(results, title)
+
+
 @tool
 def get_course_sections(course_code: str) -> str:
     """Get detailed section information for a specific UF course.
 
-    Use this tool after search_courses to get full details about a course's
+    Use this after a course search to get full details about a course's
     sections, including instructors, schedule, meeting locations, delivery mode,
     gen-ed designations, and more.
 
@@ -198,7 +209,8 @@ def get_course_sections(course_code: str) -> str:
     if not entries:
         return (
             f'No course found with code "{course_code}". '
-            "Use search_courses to find the correct course code first."
+            "Use search_courses_by_code or search_courses_by_title to find "
+            "the correct course code first."
         )
 
     from collections import Counter

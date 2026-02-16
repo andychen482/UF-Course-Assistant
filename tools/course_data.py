@@ -1,141 +1,135 @@
 """
-Course data loading and indexing module.
+Course data module -- live queries against the UF One.UF Schedule of Courses API.
 
-Loads the most recent *_clean.json from the courses/ directory into memory
-and builds indexes for fast course lookup by code and name.
+All searches hit the API in real time so results are always up to date.
 """
 
-import json
-import os
-import glob
-from collections import defaultdict
+import logging
+from datetime import date
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# API configuration
+# ---------------------------------------------------------------------------
+
+_BASE_URL = "https://one.ufl.edu/apix/soc/schedule/"
+_CATEGORY = "RES"
+_TIMEOUT = 15  # seconds
 
 
-# Resolve paths relative to this file's parent (project root)
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_COURSES_DIR = os.path.join(_PROJECT_ROOT, "courses")
+def _current_term() -> str:
+    """Auto-detect the current UF term code based on today's date.
 
-
-def _find_latest_clean_json() -> str:
-    """Find the most recently modified *_clean.json file in courses/."""
-    pattern = os.path.join(_COURSES_DIR, "*_clean.json")
-    files = glob.glob(pattern)
-    if not files:
-        raise FileNotFoundError(
-            f"No *_clean.json files found in {_COURSES_DIR}. "
-            "Run the scraper first to generate course data."
-        )
-    # Return the most recently modified file
-    return max(files, key=os.path.getmtime)
-
-
-def _load_courses(filepath: str) -> list[dict]:
-    """Load and return the course list from a JSON file."""
-    with open(filepath, "r") as f:
-        data = json.load(f)
-    return data
-
-
-def _build_indexes(
-    courses: list[dict],
-) -> tuple[dict[str, list[dict]], list[tuple[str, str, int]]]:
+    Term format: ``2`` + 2-digit year + semester digit
+        Spring = 1, Summer = 5, Fall = 8
+    Example: Spring 2026 -> ``2261``
     """
-    Build lookup structures from the course list.
+    today = date.today()
+    year = today.year % 100
+    month = today.month
+    if month <= 4:
+        sem = "1"  # Spring
+    elif month <= 7:
+        sem = "5"  # Summer
+    else:
+        sem = "8"  # Fall
+    return f"2{year}{sem}"
 
-    Some course codes have multiple entries (e.g. "Special Topics" with
-    different subtitles), so code_index maps each code to a *list* of
-    course dicts.
 
-    Returns:
-        code_index: dict mapping uppercase course code -> list of course dicts
-        name_index: list of (uppercase_code, lowercase_name, entry_idx)
-                    for substring search (entry_idx is the position within
-                    that code's list so we can return specific entries)
-    """
-    code_index: dict[str, list[dict]] = defaultdict(list)
-    name_index: list[tuple[str, str, int]] = []
+# Resolved once at import time; override with set_term() if needed.
+_term = _current_term()
 
-    for course in courses:
-        code_upper = course["code"].upper()
-        idx = len(code_index[code_upper])
-        code_index[code_upper].append(course)
-        name_index.append((code_upper, course["name"].lower(), idx))
 
-    return dict(code_index), name_index
+def set_term(term: str) -> None:
+    """Override the auto-detected term (e.g. ``"2261"`` for Spring 2026)."""
+    global _term
+    _term = term
+
+
+def get_term() -> str:
+    """Return the currently configured term code."""
+    return _term
 
 
 # ---------------------------------------------------------------------------
-# Module-level initialization: load data and build indexes on first import
+# Internal API helpers
 # ---------------------------------------------------------------------------
-_data_file = _find_latest_clean_json()
-_courses = _load_courses(_data_file)
-_code_index, _name_index = _build_indexes(_courses)
+
+def _query_api(extra_params: dict) -> list[dict]:
+    """Make a single request to the UF SOC API and return a list of courses.
+
+    The API returns at most 50 courses per call.  For targeted searches
+    (by code or title) this is almost always sufficient.
+    """
+    params = {
+        "category": _CATEGORY,
+        "term": _term,
+        "last-control-number": 0,
+    }
+    params.update(extra_params)
+
+    try:
+        resp = requests.get(_BASE_URL, params=params, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+    except requests.RequestException as exc:
+        logger.error("UF API request failed: %s", exc)
+        return []
+    except ValueError:
+        logger.error("UF API returned invalid JSON")
+        return []
+
+    courses: list[dict] = []
+    if isinstance(data, list):
+        for item in data:
+            for course in item.get("COURSES", []):
+                # Add codeWithSpace for display convenience
+                code = course.get("code", "")
+                course["codeWithSpace"] = code[:3] + " " + code[3:] if len(code) > 3 else code
+                courses.append(course)
+
+    return courses
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def get_courses(code: str) -> list[dict]:
-    """
-    Look up all course entries for a given code (case-insensitive).
-
-    Returns a list of course dicts (may contain multiple entries for
-    courses like "Special Topics" that share a code but have different
-    subtitles). Returns an empty list if the code is not found.
-    """
-    return _code_index.get(code.strip().upper(), [])
-
-
 def search_by_code(query: str, limit: int = 10) -> list[dict]:
-    """
-    Search courses by code. Tries exact match first, then prefix match.
+    """Search courses by course code (exact or prefix).
 
     Args:
-        query: Full or partial course code (e.g. "COP3530" or "COP").
+        query: Full or partial course code (e.g. ``"COP3530"`` or ``"COP"``).
         limit: Maximum number of results to return.
 
     Returns:
-        List of matching course dicts, up to `limit`.
+        List of course dicts from the API.
     """
-    query_upper = query.strip().upper()
-
-    # Exact match -- return all entries for that code
-    exact = _code_index.get(query_upper)
-    if exact:
-        return exact[:limit]
-
-    # Prefix match -- collect entries from all matching codes
-    matches: list[dict] = []
-    seen_codes: set[str] = set()
-    for code, _, _ in _name_index:
-        if code.startswith(query_upper) and code not in seen_codes:
-            seen_codes.add(code)
-            matches.extend(_code_index[code])
-            if len(matches) >= limit:
-                break
-    return matches[:limit]
+    courses = _query_api({"course-code": query.strip()})
+    return courses[:limit]
 
 
 def search_by_name(query: str, limit: int = 10) -> list[dict]:
-    """
-    Search courses by name using case-insensitive substring matching.
+    """Search courses by name / title substring.
 
     Args:
-        query: Search string to match against course names.
+        query: Search string to match against course titles.
         limit: Maximum number of results to return.
 
     Returns:
-        List of matching course dicts, up to `limit`.
+        List of course dicts from the API.
     """
-    query_lower = query.strip().lower()
-    if not query_lower:
-        return []
+    courses = _query_api({"course-title": query.strip()})
+    return courses[:limit]
 
-    matches: list[dict] = []
-    for code, name, idx in _name_index:
-        if query_lower in name:
-            matches.append(_code_index[code][idx])
-            if len(matches) >= limit:
-                break
-    return matches[:limit]
+
+def get_courses(code: str) -> list[dict]:
+    """Look up all course entries for a given exact code.
+
+    Returns a list because some codes (e.g. Special Topics) have multiple
+    listings with different subtitles.
+    """
+    return _query_api({"course-code": code.strip()})
