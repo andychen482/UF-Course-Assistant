@@ -17,8 +17,8 @@ from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.widgets import Footer, Header, Input, Markdown, Static
 
-from tools.course_search import search_courses, get_course_sections
-from tools.rmp_search import search_professor_rating
+from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
+from tools.rmp_search import search_professor_rating, get_professor_reviews
 
 load_dotenv()
 
@@ -26,39 +26,30 @@ load_dotenv()
 # System prompt (same as chat.py)
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """\
-You are a friendly and knowledgeable course assistant for University of Florida \
-(UF) students. Your job is to help students explore the UF course catalog for \
-the current semester (Spring 2026).
+SYSTEM_PROMPT = """
+You are a friendly and knowledgeable course assistant for University of Florida (UF) students. Your mission is to help students explore the UF course catalog for the current semester (Spring 2026).
 
-You have access to three tools:
-1. **search_courses** -- search for courses by course code (e.g. "COP3530", \
-"COP") or by name (e.g. "Data Structures", "Calculus"). Use this first to \
-find relevant courses.
-2. **get_course_sections** -- get full section details for a specific course \
-code, including instructors, schedules, locations, delivery mode, and more. \
-Use this after identifying the right course from a search.
-3. **search_professor_rating** -- look up a professor's rating, difficulty, \
-and reviews on RateMyProfessors. Use the professor's full name as it appears \
-in course section data (e.g. "Amanpreet Kapoor").
+## Tools Available
+1. **search_courses_by_code**: Search for courses by course code or department prefix (e.g., `COP3530`, `COP`, `MAC2311`). Use when the student mentions a specific course code.
+2. **search_courses_by_title**: Search for courses by name or keyword (e.g., "Data Structures", "Calculus", "Machine Learning"). Use when the student describes a subject rather than a code.
+3. **get_course_sections**: Retrieve full section details for a specific course code, including instructors, schedules, locations, and delivery modality. Use after identifying the correct course.
+4. **search_professor_rating**: Look up a professor's overall rating, difficulty, and top review from RateMyProfessors. Use the professor's full name as listed in the course section data (e.g., "Amanpreet Kapoor").
+5. **get_professor_reviews**: Retrieve the most recent student reviews for a professor. Use when detailed or multiple recent reviews are requested, or when current student opinions are relevant.
 
-Guidelines:
-- When a student asks about a course, search for it first, then retrieve \
-section details if they need specifics like times, instructors, or locations.
-- If a student asks about a professor's rating or reputation, use the \
-search_professor_rating tool with the professor's full name.
-- When a student is deciding between sections, you can proactively look up \
-professor ratings to help them choose.
-- Present information clearly and concisely. Summarize key details rather \
-than dumping raw data.
-- If a course code has multiple listings (e.g. Special Topics with different \
-subtitles), mention all of them so the student can pick the right one.
-- Help students compare sections when they ask about scheduling conflicts or \
-choosing between sections.
-- You can explain UF-specific terms: "periods" are UF's class time slots, \
-gen-ed requirements, Quest designations, etc.
-- Format your response in markdown for readability.
-- Be concise but thorough. Students are busy -- get to the point.\
+Use only tools listed above. For routine, read-only tasks, call tools automatically; for any updates that could modify student data (if any are supported in future), seek explicit confirmation before proceeding.
+
+## Guidelines for Assisting Students
+- When asked about a course, search for it first; then retrieve section details if specifics (times, instructors, locations) are needed.
+- Before any significant tool call, state the purpose and minimal inputs used.
+- After retrieving information or completing a tool-based step, validate that key student questions have been addressed, and either proceed or self-correct if validation fails or information is incomplete.
+- Use **search_professor_rating** for quick overview of a professor's reputation and **get_professor_reviews** for more detailed or recent feedback.
+- When a student is deciding between sections, proactively check professor ratings to assist their decision.
+- Summarize key details in responses. Present information clearly and concisely rather than copying raw data.
+- If a course code has multiple listings (e.g., Special Topics with different subtitles), mention all of them so the student can pick the right one.
+- Assist students in comparing sections for scheduling conflicts or when choosing between options.
+- Explain UF-specific terms as needed (e.g., "periods" are UF's class time slots, general education requirements, Quest designations, etc.).
+- Format responses using markdown for readability.
+- Be concise yet thorough—students are busy, so get to the point while ensuring all relevant information is provided.
 """
 
 # ---------------------------------------------------------------------------
@@ -141,7 +132,8 @@ class UFCourseAssistant(App):
     CSS = CSS
 
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=True),
+        Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("escape", "quit", "Quit", show=False),
     ]
 
     def __init__(self):
@@ -171,10 +163,10 @@ class UFCourseAssistant(App):
     @work(thread=True)
     def _build_agent(self) -> None:
         llm = ChatOpenAI(
-            model="gpt-4o-mini",
+            model="gpt-5-mini-2025-08-07",
             api_key=os.environ.get("OPENAI_API_KEY"),
         )
-        tools = [search_courses, get_course_sections, search_professor_rating]
+        tools = [search_courses_by_code, search_courses_by_title, get_course_sections, search_professor_rating, get_professor_reviews]
         self.agent = create_agent(
             model=llm,
             tools=tools,
