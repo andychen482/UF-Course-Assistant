@@ -19,7 +19,7 @@ from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
-from tools.reddit_search import search_reddit
+from tools.reddit_search import search_reddit, live_scrape_reddit
 
 load_dotenv()
 
@@ -176,6 +176,7 @@ class UFCourseAssistant(App):
             search_professor_rating,
             get_professor_reviews,
             search_reddit,
+            live_scrape_reddit,
         ]
         self.agent = create_agent(
             model=llm,

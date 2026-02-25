@@ -13,7 +13,7 @@ from langchain.agents import create_agent
 
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
-from tools.reddit_search import search_reddit
+from tools.reddit_search import search_reddit, live_scrape_reddit
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -74,6 +74,7 @@ def build_agent():
         api_key=os.environ.get("OPENAI_API_KEY"),
     )
 
+
     tools = [
         search_courses_by_code,
         search_courses_by_title,
@@ -81,6 +82,7 @@ def build_agent():
         search_professor_rating,
         get_professor_reviews,
         search_reddit,
+        live_scrape_reddit,
     ]
 
     agent = create_agent(
