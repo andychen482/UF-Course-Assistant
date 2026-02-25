@@ -13,6 +13,7 @@ from langchain.agents import create_agent
 
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
+from tools.reddit_search import search_reddit
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -25,7 +26,7 @@ You are a friendly and knowledgeable course assistant for University of Florida 
 (UF) students. Your job is to help students explore the UF course catalog for \
 the current semester (Spring 2026).
 
-You have access to four tools:
+You have access to these tools:
 1. **search_courses_by_code** -- search for courses by course code or \
 department prefix (e.g. "COP3530", "COP", "MAC 2311"). Use this when the \
 student mentions a specific course code.
@@ -41,6 +42,7 @@ name as it appears in course section data (e.g. "Amanpreet Kapoor").
 5. **get_professor_reviews** -- get the most recent student reviews for a \
 professor. Use this when the student wants detailed recent feedback, multiple \
 reviews, or wants to know what current students are saying.
+6. **search_reddit** -- search Reddit posts and comments from r/UFL for relevant information about UF courses, majors, or topics. Use this to provide student perspectives, advice, or experiences from Reddit. Vulgar content is filtered out automatically.
 
 Guidelines:
 - When a student asks about a course, search for it first, then retrieve \
@@ -50,6 +52,7 @@ search_professor_rating for a quick overview. Use get_professor_reviews if \
 they want more detail or recent reviews.
 - When a student is deciding between sections, you can proactively look up \
 professor ratings to help them choose.
+- Use **search_reddit** to supplement answers with student opinions, tips, or experiences from Reddit, but only include relevant and appropriate content.
 - Present information clearly and concisely. Summarize key details rather \
 than dumping raw data.
 - If a course code has multiple listings (e.g. Special Topics with different \
@@ -71,7 +74,14 @@ def build_agent():
         api_key=os.environ.get("OPENAI_API_KEY"),
     )
 
-    tools = [search_courses_by_code, search_courses_by_title, get_course_sections, search_professor_rating, get_professor_reviews]
+    tools = [
+        search_courses_by_code,
+        search_courses_by_title,
+        get_course_sections,
+        search_professor_rating,
+        get_professor_reviews,
+        search_reddit,
+    ]
 
     agent = create_agent(
         model=llm,
