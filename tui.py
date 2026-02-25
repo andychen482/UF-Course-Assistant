@@ -19,6 +19,7 @@ from textual.widgets import Footer, Header, Input, Markdown, Static
 
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
+from tools.reddit_search import search_reddit, live_scrape_reddit
 
 load_dotenv()
 
@@ -35,6 +36,7 @@ You are a friendly and knowledgeable course assistant for University of Florida 
 3. **get_course_sections**: Retrieve full section details for a specific course code, including instructors, schedules, locations, and delivery modality. Use after identifying the correct course.
 4. **search_professor_rating**: Look up a professor's overall rating, difficulty, and top review from RateMyProfessors. Use the professor's full name as listed in the course section data (e.g., "Amanpreet Kapoor").
 5. **get_professor_reviews**: Retrieve the most recent student reviews for a professor. Use when detailed or multiple recent reviews are requested, or when current student opinions are relevant.
+6. **search_reddit**: Search Reddit posts and comments from r/UFL for relevant information about UF courses, majors, or topics. Use this to provide student perspectives, advice, or experiences from Reddit. Vulgar content is filtered out automatically.
 
 Use only tools listed above. For routine, read-only tasks, call tools automatically; for any updates that could modify student data (if any are supported in future), seek explicit confirmation before proceeding.
 
@@ -44,6 +46,7 @@ Use only tools listed above. For routine, read-only tasks, call tools automatica
 - After retrieving information or completing a tool-based step, validate that key student questions have been addressed, and either proceed or self-correct if validation fails or information is incomplete.
 - Use **search_professor_rating** for quick overview of a professor's reputation and **get_professor_reviews** for more detailed or recent feedback.
 - When a student is deciding between sections, proactively check professor ratings to assist their decision.
+- Use **search_reddit** to supplement answers with student opinions, tips, or experiences from Reddit, but only include relevant and appropriate content.
 - Summarize key details in responses. Present information clearly and concisely rather than copying raw data.
 - If a course code has multiple listings (e.g., Special Topics with different subtitles), mention all of them so the student can pick the right one.
 - Assist students in comparing sections for scheduling conflicts or when choosing between options.
@@ -166,7 +169,15 @@ class UFCourseAssistant(App):
             model="gpt-5-mini-2025-08-07",
             api_key=os.environ.get("OPENAI_API_KEY"),
         )
-        tools = [search_courses_by_code, search_courses_by_title, get_course_sections, search_professor_rating, get_professor_reviews]
+        tools = [
+            search_courses_by_code,
+            search_courses_by_title,
+            get_course_sections,
+            search_professor_rating,
+            get_professor_reviews,
+            search_reddit,
+            live_scrape_reddit,
+        ]
         self.agent = create_agent(
             model=llm,
             tools=tools,
