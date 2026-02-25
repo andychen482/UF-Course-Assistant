@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+# to use
+# python run_reddit_scrapes.py daily  
+
 import subprocess
 import json
 import os
