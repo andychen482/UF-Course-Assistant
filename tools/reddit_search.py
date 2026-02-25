@@ -36,10 +36,22 @@ def _clean_text(text: str) -> str:
 def _expand_query_with_course_name(query: str) -> list[str]:
     """If query is a course code, add the course name for better Reddit search."""
     queries = [query]
+    # Add normalized course code variants
+    code_nospace = query.strip().replace(" ", "").upper()
+    code_withspace = re.sub(r"([A-Z]+)([0-9]+)", r"\1 \2", code_nospace)
+    # Add both forms if not already present
+    if code_nospace not in [q.upper().replace(" ", "") for q in queries]:
+        queries.append(code_nospace)
+    if code_withspace not in [q.upper() for q in queries]:
+        queries.append(code_withspace)
+    # Add lowercase variants
+    if code_nospace.lower() not in [q.lower().replace(" ", "") for q in queries]:
+        queries.append(code_nospace.lower())
+    if code_withspace.lower() not in [q.lower() for q in queries]:
+        queries.append(code_withspace.lower())
     # Try to resolve course code to name using search_courses_by_code
-    code = query.strip().replace(" ", "").upper()
     try:
-        course_results = search_courses_by_code.invoke({"query": code})
+        course_results = search_courses_by_code.invoke({"query": code_nospace})
         if isinstance(course_results, str):
             import ast
             try:
@@ -55,13 +67,32 @@ def _expand_query_with_course_name(query: str) -> list[str]:
         pass
     return queries
 
-def _search_reddit(query: str, limit: int = 10) -> list[dict]:
-    """Search UFL_master.json for posts/comments relevant to the query or course name."""
-    if not os.path.exists(REDDIT_MASTER_PATH):
-        return []
+_reddit_data_cache = None
+_reddit_data_cache_mtime = None
 
+def _load_reddit_data():
+    global _reddit_data_cache, _reddit_data_cache_mtime
+    try:
+        mtime = os.path.getmtime(REDDIT_MASTER_PATH)
+    except Exception:
+        return None
+    if _reddit_data_cache is not None and _reddit_data_cache_mtime == mtime:
+        return _reddit_data_cache
+    if not os.path.exists(REDDIT_MASTER_PATH):
+        _reddit_data_cache = None
+        _reddit_data_cache_mtime = None
+        return None
     with open(REDDIT_MASTER_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
+    _reddit_data_cache = data
+    _reddit_data_cache_mtime = mtime
+    return data
+
+def _search_reddit(query: str, limit: int = 10) -> list[dict]:
+    """Search UFL_master.json for posts/comments relevant to the query or course name."""
+    data = _load_reddit_data()
+    if not data:
+        return []
 
     results = []
     queries = _expand_query_with_course_name(query)
