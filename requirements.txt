@@ -4,4 +4,7 @@ langchain-openai
 langgraph
 python-dotenv
 requests
-textual
+fastapi
+uvicorn[standard]
+sse-starlette
+PyJWT[crypto]
