@@ -8,3 +8,4 @@ fastapi
 uvicorn[standard]
 sse-starlette
 PyJWT[crypto]
+boto3

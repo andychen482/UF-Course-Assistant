@@ -6,7 +6,7 @@ Usage:
 """
 
 import os
-from constants import OPENAI_API_KEY
+from utils.constants import OPENAI_API_KEY
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent

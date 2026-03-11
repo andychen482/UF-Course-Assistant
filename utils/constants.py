@@ -29,6 +29,17 @@ JWKS_TTL_SECONDS: int = 3600  # re-fetch signing keys once per hour
 SESSION_TTL_SECONDS: int = 30 * 60  # 30 minutes
 
 # ---------------------------------------------------------------------------
+# DynamoDB
+# ---------------------------------------------------------------------------
+
+CHAT_TABLE: str = "ufscheduler-chat"
+USERS_TABLE: str = "ufscheduler-users"
+METRICS_TABLE: str = "ufscheduler-stats"
+
+MESSAGES_BATCH_SIZE: int = 20
+MESSAGE_MAX_LENGTH: int = 250
+
+# ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
 

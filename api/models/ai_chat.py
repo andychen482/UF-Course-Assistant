@@ -1,6 +1,4 @@
-"""
-Pydantic request / response models for the API.
-"""
+"""Chat request / response models."""
 
 from __future__ import annotations
 
@@ -15,7 +13,3 @@ class ChatRequest(BaseModel):
 class ChatDeleteResponse(BaseModel):
     status: str
     session_id: str
-
-
-class HealthResponse(BaseModel):
-    status: str

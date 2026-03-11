@@ -14,12 +14,12 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
-from models import ChatRequest
-from sessions import add_message, create_session, delete_session, get_session
+from api.models.ai_chat import ChatDeleteResponse, ChatRequest
+from utils.sessions import add_message, create_session, delete_session, get_session
 
 logger = logging.getLogger("uvicorn.error")
 
-# The running agent instance is injected by the lifespan handler in api.py.
+# The running agent instance is injected by the lifespan handler in api/__init__.py.
 agent = None
 
 
@@ -87,7 +87,7 @@ async def stream_chat(
 
 def handle_delete_session(
     session_id: str, user: dict[str, Any]
-) -> dict[str, str]:
+) -> ChatDeleteResponse:
     """Delete a session and return a confirmation payload."""
     deleted = delete_session(session_id, user["sub"])
     if not deleted:
@@ -95,4 +95,4 @@ def handle_delete_session(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Session not found",
         )
-    return {"status": "deleted", "session_id": session_id}
+    return ChatDeleteResponse(status="deleted", session_id=session_id)

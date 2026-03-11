@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from constants import SESSION_TTL_SECONDS
+from utils.constants import SESSION_TTL_SECONDS
 
 
 @dataclass
