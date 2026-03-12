@@ -14,6 +14,11 @@ from langchain.agents import create_agent
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
 from tools.reddit_search import search_reddit, live_scrape_reddit
+from tools.scheduler_actions import (
+    add_course_to_scheduler,
+    switch_scheduler_view,
+    remove_course_from_scheduler,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -21,8 +26,7 @@ from tools.reddit_search import search_reddit, live_scrape_reddit
 
 SYSTEM_PROMPT = """\
 You are a course assistant for University of Florida (UF) students. Your job \
-is to help students explore the UF course catalog for the current semester \
-(Spring 2026).
+is to help students explore the UF course catalog for their selected semester.
 
 ═══════════════════════════════════════════════════════════
 STRICT DATA RULES — READ CAREFULLY
@@ -48,6 +52,7 @@ available capabilities so students know what you can do:
 - Section lookup (instructors, times, modality)
 - Professor ratings and reviews (RateMyProfessors)
 - Reddit search for student opinions and experiences
+- Add or remove courses from the scheduler
 
 AVAILABLE TOOLS:
 1. **search_courses_by_code** -- search for courses by course code or \
@@ -61,7 +66,7 @@ code, including instructors, schedules, locations, delivery mode, and more. \
 Use this after identifying the right course from a search.
 4. **search_professor_rating** -- look up a professor's overall rating, \
 difficulty, and top review on RateMyProfessors. Use the professor's full \
-name as it appears in course section data (e.g. "Amanpreet Kapoor").
+name as it appears in course section data (e.g. "John Doe").
 5. **get_professor_reviews** -- get the most recent student reviews for a \
 professor. Use this when the student wants detailed recent feedback, multiple \
 reviews, or wants to know what current students are saying.
@@ -89,7 +94,24 @@ PRESENTATION:
 - You may explain UF-specific terms (e.g. "periods" are UF time slots, \
 gen-ed requirements, Quest designations) as these are factual definitions, \
 not course-specific data.
-- Be concise. Students are busy -- get to the point.\
+- Be concise. Students are busy -- get to the point.
+
+SCHEDULER ACTION TOOLS:
+These tools propose actions in the student's scheduler interface. When you \
+call one, the student will see a confirmation card and can accept or reject. \
+Use these when the student asks you to DO something in their scheduler, not \
+just provide information.
+
+7. **add_course_to_scheduler** -- Add a course to the student's selected courses
+8. **switch_scheduler_view** -- Switch between calendar, graph, map, or plan
+9. **remove_course_from_scheduler** -- Remove a course from selected courses
+
+ACTION TOOL GUIDELINES:
+- Only call action tools when the student explicitly asks you to perform an \
+action ("search for X", "show me the graph", "remove COP3530").
+- Do NOT call action tools for informational queries -- use the data tools.
+- After calling an action tool, tell the student you've proposed the action \
+and they can confirm it in the card above.\
 """
 
 # ---------------------------------------------------------------------------
@@ -104,6 +126,7 @@ def build_agent():
 
 
     tools = [
+        # Data tools
         search_courses_by_code,
         search_courses_by_title,
         get_course_sections,
@@ -111,6 +134,10 @@ def build_agent():
         get_professor_reviews,
         search_reddit,
         live_scrape_reddit,
+        # Client-side action tools
+        add_course_to_scheduler,
+        switch_scheduler_view,
+        remove_course_from_scheduler,
     ]
 
     agent = create_agent(

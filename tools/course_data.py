@@ -4,6 +4,7 @@ Course data module -- live queries against the UF One.UF Schedule of Courses API
 All searches hit the API in real time so results are always up to date.
 """
 
+import contextvars
 import logging
 from datetime import date
 
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 # API configuration
 # ---------------------------------------------------------------------------
 
-_BASE_URL = "https://one.ufl.edu/apix/soc/schedule/"
+_BASE_URL = "https://one.uf.edu/apix/soc/schedule/"
 _CATEGORY = "RES"
 _TIMEOUT = 15  # seconds
 
@@ -39,12 +40,21 @@ def _current_term() -> str:
     return f"2{year}{sem}"
 
 
-# Resolved once at import time; override with set_term() if needed.
+# Resolved once at import time; override with set_term() for the CLI path.
 _term = _current_term()
+
+# Per-request term for the async API path (safe for concurrent requests).
+_request_term: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "request_term", default=None
+)
 
 
 def set_term(term: str) -> None:
-    """Override the auto-detected term (e.g. ``"2261"`` for Spring 2026)."""
+    """Override the auto-detected term (e.g. ``"2261"`` for Spring 2026).
+
+    Used by the CLI (``chat.py main()``). The API path uses
+    :func:`set_request_term` instead.
+    """
     global _term
     _term = term
 
@@ -52,6 +62,16 @@ def set_term(term: str) -> None:
 def get_term() -> str:
     """Return the currently configured term code."""
     return _term
+
+
+def set_request_term(term: str) -> contextvars.Token:
+    """Set the term for the current async request context."""
+    return _request_term.set(term)
+
+
+def _get_active_term() -> str:
+    """Return the request-scoped term if set, otherwise the global default."""
+    return _request_term.get() or _term
 
 
 # ---------------------------------------------------------------------------
@@ -64,9 +84,12 @@ def _query_api(extra_params: dict) -> list[dict]:
     The API returns at most 50 courses per call.  For targeted searches
     (by code or title) this is almost always sufficient.
     """
+    active_term = _get_active_term()
+    logger.info("_query_api using term=%s (contextvar=%s, global=%s)",
+                active_term, _request_term.get(), _term)
     params = {
         "category": _CATEGORY,
-        "term": _term,
+        "term": active_term,
         "last-control-number": 0,
     }
     params.update(extra_params)

@@ -339,10 +339,10 @@ def search_professor_rating(professor_name: str) -> str:
 
     Use this tool when a student asks about a professor's rating, reviews,
     difficulty, or reputation. Provide the professor's full name as it appears
-    in the course catalog (e.g. "Amanpreet Kapoor").
+    in the course catalog (e.g. "John Doe").
 
     Args:
-        professor_name: The professor's full name (e.g. "Amanpreet Kapoor").
+        professor_name: The professor's full name (e.g. "John Doe").
     """
     name = professor_name.strip()
     if not name:
@@ -399,7 +399,7 @@ def get_professor_reviews(professor_name: str, num_reviews: int = 5) -> str:
     scores, grades, dates, tags, and student comments.
 
     Args:
-        professor_name: The professor's full name (e.g. "Amanpreet Kapoor").
+        professor_name: The professor's full name (e.g. "John Doe").
         num_reviews: Number of recent reviews to fetch (default 5, max 20).
     """
     name = professor_name.strip()
