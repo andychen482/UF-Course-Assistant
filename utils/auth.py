@@ -16,7 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWTError
 
-from constants import (
+from utils.constants import (
     COGNITO_APP_CLIENT_ID,
     COGNITO_REGION,
     COGNITO_USER_POOL_ID,

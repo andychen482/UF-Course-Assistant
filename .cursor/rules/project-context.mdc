@@ -11,17 +11,38 @@ LLM-powered FastAPI microservice that helps UF students research courses. Aggreg
 ## Architecture
 
 ```
-api.py (FastAPI app + lifespan)
-  └── router.py (route definitions — thin, delegate everything to controller)
-        └── controller.py (business logic, SSE streaming)
-              ├── sessions.py (in-memory session store keyed by UUID hex session ID)
-              ├── chat.py (build_agent() — assembles LangGraph ReAct agent + tools)
-              │     └── tools/ (@tool-decorated LangChain tool functions)
-              │           ├── course_search.py → course_data.py (UF SOC live API)
-              │           ├── rmp_search.py (RateMyProfessors GraphQL)
-              │           └── reddit_search.py (local JSON + live Reddit API)
-              └── utils/auth.py (Cognito JWT validation via python-jose)
-scrapers/ (offline ETL — NOT part of the live request path)
+main.py                       (FastAPI app + lifespan — uvicorn main:app)
+api/                          (API package)
+  __init__.py
+  routers/
+    __init__.py               (aggregates all sub-routers)
+    health.py                 (GET /health)
+    chat.py                   (POST /chat, DELETE /chat/{session_id})
+    chat_room.py              (SSE events, send/load messages)
+    metrics.py                (POST major/course/search tracking)
+    user.py                   (user routes — stub)
+  controllers/
+    chat.py                   (AI chat business logic, SSE streaming)
+    chat_room.py              (pub/sub chat room, DynamoDB persistence)
+    metrics.py                (daily analytics counters)
+    user.py                   (user management — stub)
+  models/
+    __init__.py               (re-exports all Pydantic models)
+    chat.py                   (ChatRequest, ChatDeleteResponse)
+    health.py                 (HealthResponse)
+    chat_room.py              (SendMessageRequest)
+    metrics.py                (TrackMajorRequest, TrackCourseRequest, …)
+    user.py                   (user models — stub)
+sessions.py                   (in-memory session store keyed by UUID hex)
+chat.py                       (build_agent() — LangGraph ReAct agent + tools)
+  └── tools/                  (@tool-decorated LangChain tool functions)
+        ├── course_search.py → course_data.py (UF SOC live API)
+        ├── rmp_search.py     (RateMyProfessors GraphQL)
+        └── reddit_search.py  (local JSON + live Reddit API)
+utils/auth.py                 (Cognito JWT validation via python-jose)
+constants.py                  (env-driven config)
+dynamo.py                     (DynamoDB table references)
+scrapers/                     (offline ETL — NOT part of the live request path)
 ```
 
 ## API Endpoints
@@ -31,6 +52,12 @@ scrapers/ (offline ETL — NOT part of the live request path)
 | `GET` | `/health` | None | `{"status": "ok"}` |
 | `POST` | `/chat` | Bearer JWT | Accepts `ChatRequest`; returns SSE stream |
 | `DELETE` | `/chat/{session_id}` | Bearer JWT | Deletes a session |
+| `GET` | `/chat-room/events` | Bearer JWT | SSE stream of chat room messages + active users |
+| `POST` | `/chat-room/messages` | Bearer JWT | Send a chat room message |
+| `GET` | `/chat-room/messages` | None | Paginated message history |
+| `POST` | `/metrics/major` | None | Track major selection |
+| `POST` | `/metrics/course` | None | Track course view |
+| `POST` | `/metrics/search` | None | Track search term |
 
 SSE event format:
 ```
@@ -41,10 +68,10 @@ event: error    data: {"detail": "..."}
 
 ## Key Conventions
 
-- **Thin routes, fat controller:** `router.py` is one-liners; all logic lives in `controller.py`
+- **Thin routes, fat controller:** routers in `api/routers/` are one-liners; all logic lives in `api/controllers/`
 - **`from __future__ import annotations`** in every module
 - **Tool outputs are plain text strings** — not JSON — so the LLM can interpret them directly
-- **Global agent singleton:** `controller.agent` is `None` at import time, set during FastAPI `lifespan`; never re-initialized per request
+- **Global agent singleton:** `api.controllers.chat.agent` is `None` at import time, set during FastAPI `lifespan`; never re-initialized per request
 - **Lazy session pruning:** `_prune_expired()` runs on every `create_session` / `get_session` call
 - **Sessions scoped to user `sub`** (Cognito subject claim) — a session belongs to one user
 
@@ -62,7 +89,7 @@ Hardcoded: `SESSION_TTL_SECONDS = 1800`, `JWKS_TTL_SECONDS = 3600`, UF SOC base 
 
 ## Data Models
 
-**`ChatRequest`** (Pydantic, `models.py`):
+**`ChatRequest`** (Pydantic, `api/models/chat.py`):
 ```python
 prompt: str
 session_id: str | None = None
@@ -98,5 +125,5 @@ Each section: `number`, `classNumber`, `sectWeb` (delivery mode), `instructors[]
 
 ## Deployment
 
-Dockerfile: Python 3.12-slim, port 8000, health check on `/health`, `uvicorn api:app`  
+Dockerfile: Python 3.12-slim, port 8000, health check on `/health`, `uvicorn main:app`  
 Makefile targets: `make build`, `make run`, `make run-mount` (dev with volume), `make stop`

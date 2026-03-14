@@ -2,7 +2,7 @@
 FastAPI application entry-point.
 
 Run locally:
-    uvicorn api:app --reload
+    uvicorn main:app --reload
 """
 
 from __future__ import annotations
@@ -13,17 +13,17 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-import controller
+from api.controllers import ai_chat as chat_controller
+from api.routers import router
 from chat import build_agent
-from constants import ALLOWED_ORIGINS
-from router import router
+from utils.constants import ALLOWED_ORIGINS
 
 logger = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    controller.agent = build_agent()
+    chat_controller.agent = build_agent()
     logger.info("LangGraph agent initialised")
     yield
 
