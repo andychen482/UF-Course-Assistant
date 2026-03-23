@@ -89,7 +89,7 @@ def _update_daily_user_count() -> None:
 async def event_stream(user: dict[str, Any]) -> AsyncGenerator[dict[str, str], None]:
     """SSE generator: yields ``message`` and ``active_users`` events."""
     global _active_users
-
+    
     queue = _subscribe()
     _active_users += 1
     _update_daily_user_count()

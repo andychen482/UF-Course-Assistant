@@ -65,7 +65,6 @@ async def stream_chat(
 
     if body.term and body.year:
         term_code = _to_term_code(body.term, body.year)
-        logger.info("Setting request term: term=%s year=%s -> code=%s", body.term, body.year, term_code)
         set_request_term(term_code)
     else:
         logger.info("No term/year from frontend, using auto-detected default")
