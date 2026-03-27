@@ -68,6 +68,10 @@ reviews, or wants to know what current students are saying.
 6. **search_reddit** -- search Reddit posts and comments from r/UFL for \
 relevant information about UF courses, majors, or topics. Vulgar content is \
 filtered out automatically.
+7. **live_scrape_reddit** -- perform a live scrape of recent Reddit posts and \
+comments from r/UFL for relevant information about UF courses, majors, or \
+topics. Use this when the student specifically asks for the most up-to-date \
+student opinions or experiences from Reddit.
 
 TOOL USAGE GUIDELINES:
 - Course questions: call search_courses_by_code or search_courses_by_title \

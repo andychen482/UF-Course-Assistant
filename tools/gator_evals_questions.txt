@@ -1,0 +1,11 @@
+Segment 0, Column 1: 15 cstring values
+  [0]: Overall, this course was a valuable educational experience.
+  [1]: Course activities and assignments improved my ability to analyze, solve problems, and/or think critically.
+  [2]: The course fostered regular interaction between student and instructor.
+  [3]: Course content (e.g., readings, activities, assignments) was relevant & useful.
+  [4]: The instructor was instrumental to my learning in the course.
+  [5]: The instructor provided prompt and meaningful feedback on my work and performance in the course.
+  [6]: The instructor fostered a positive learning environment that engaged students.
+  [7]: The instructor maintained clear standards for response and availability (e.g. turnaround time for email, office hours, etc.)
+  [8]: The instructor explained material clearly and in a way that enhanced my understanding.
+  [9]: The instructor was enthusiastic about the course.
