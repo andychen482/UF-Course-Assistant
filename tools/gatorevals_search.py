@@ -10,7 +10,6 @@ Scale: 1 = Strongly Disagree … 5 = Strongly Agree
 
 import csv
 import os
-from urllib.parse import quote
 from langchain_core.tools import tool
 
 # ---------------------------------------------------------------------------
@@ -20,10 +19,14 @@ from langchain_core.tools import tool
 _DATA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_instructors.csv")
 
-_TABLEAU_BASE = (
-    "https://public.tableau.com/views/"
-    "GatorEvalsTableauPublic3TermstoFall2025/GatorEvalsPublicDashboard"
-)
+# Raw Tableau Public URL -- used internally by scrapers, kept for reference.
+# _TABLEAU_URL = (
+#     "https://public.tableau.com/views/"
+#     "GatorEvalsTableauPublic3TermstoFall2025/GatorEvalsPublicDashboard"
+# )
+
+# UF-hosted page with the Tableau dashboard embedded (user-facing link).
+_TABLEAU_URL = "https://gatorevals.aa.ufl.edu/public-results/"
 
 _QUESTIONS = [
     "Overall, this course was a valuable educational experience",
@@ -140,10 +143,15 @@ def _match_instructor(query: str) -> list[dict]:
 # Tableau URL generation
 # ---------------------------------------------------------------------------
 
-def _tableau_url(instructor_name: str) -> str:
-    """Generate a Tableau Public URL filtered to the given instructor."""
-    encoded = quote(instructor_name, safe="")
-    return f"{_TABLEAU_BASE}?INSTRUCTOR%20NAME={encoded}"
+def _tableau_url() -> str:
+    """Return the GatorEvals Tableau dashboard link.
+
+    Tableau Public URL parameter filtering doesn't work for instructor names
+    because they contain commas (LASTNAME,FIRSTNAME) and Tableau treats
+    commas as multi-value separators. So we link to the base dashboard and
+    tell the user which name to select in the Instructor filter.
+    """
+    return _TABLEAU_URL
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +167,8 @@ def _format_scores(entry: dict) -> str:
 
     if not has_data:
         lines.append("  No evaluation data available for this instructor.")
-        lines.append(f"  Tableau Dashboard: {_tableau_url(entry['name'])}")
+        lines.append(f"  Tableau Dashboard: {_tableau_url()}")
+        lines.append(f"  (Search for \"{entry['name']}\" in the Instructor filter)")
         return "\n".join(lines)
 
     lines.append("  RATING SCALE: 1 = Strongly Disagree, 2 = Disagree, "
@@ -183,7 +192,8 @@ def _format_scores(entry: dict) -> str:
         lines.append("")
         lines.append(f"  Average across all questions: {overall_avg}/5")
 
-    lines.append(f"\n  Tableau Dashboard: {_tableau_url(entry['name'])}")
+    lines.append(f"\n  Tableau Dashboard: {_tableau_url()}")
+    lines.append(f"  (Search for \"{entry['name']}\" in the Instructor filter)")
 
     return "\n".join(lines)
 
