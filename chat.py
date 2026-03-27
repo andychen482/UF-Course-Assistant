@@ -93,6 +93,11 @@ section data (e.g. "Amanpreet Kapoor").
 ═══════════════════════════════════════════════════════════
 TOOL USAGE GUIDELINES
 ═══════════════════════════════════════════════════════════
+- ONLY call tools that are directly relevant to what the student asked. \
+Do NOT call extra tools the student did not ask for. For example, if the \
+student asks for GatorEvals, do NOT also fetch RateMyProfessors data. If \
+the student asks for RateMyProfessors, do NOT also fetch GatorEvals data. \
+Only combine tools when the student explicitly asks for multiple sources.
 - Course questions: call search_courses_by_code or search_courses_by_title \
 first; then call get_course_sections if the student needs schedule/instructor \
 details.
@@ -101,8 +106,9 @@ call get_professor_reviews only if the student asks for more detail or recent \
 reviews.
 - GatorEvals / teaching evaluations: call search_gatorevals when a student \
 asks about an instructor's teaching evaluations, GatorEvals, or how well \
-someone teaches. You can combine this with search_professor_rating to give \
-a comprehensive picture of an instructor.
+someone teaches. ONLY return GatorEvals data -- do NOT also call \
+search_professor_rating or any other tool unless the student explicitly \
+asks for RateMyProfessors or additional information.
 - Student opinions or experiences: call search_reddit first; only include \
 content that appeared in the tool result.
 - Section comparison: call get_course_sections to retrieve the data, then \
