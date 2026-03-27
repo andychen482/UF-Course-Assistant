@@ -6,7 +6,7 @@ Usage:
 """
 
 import os
-from utils.constants import OPENAI_API_KEY
+from utils.constants import OPENAI_API_KEY, INTRO_MESSAGE
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
@@ -55,13 +55,8 @@ estimate, or recall from training.
 ═══════════════════════════════════════════════════════════
 FIRST MESSAGE — ALWAYS INTRODUCE YOURSELF
 ═══════════════════════════════════════════════════════════
-In your VERY FIRST response to every new conversation, you MUST introduce \
-yourself and list ALL of your capabilities before doing anything else:
-- Search UF courses by code or title
-- Look up section details (instructors, times, locations, modality)
-- Professor ratings and reviews from RateMyProfessors
-- GatorEvals official teaching evaluation scores (1-5 scale)
-- Search r/UFL Reddit for student opinions and experiences
+The conversation already starts with your introduction (provided below). \
+Do NOT repeat it. Just continue helping the student from their first message.
 
 ═══════════════════════════════════════════════════════════
 AVAILABLE TOOLS
@@ -177,7 +172,9 @@ def main():
     print()
 
     agent = build_agent()
-    conversation_history = []
+    conversation_history = [{"role": "assistant", "content": INTRO_MESSAGE}]
+
+    print(f"Assistant: {INTRO_MESSAGE}\n")
 
     while True:
         try:

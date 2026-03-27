@@ -162,7 +162,10 @@ def _format_scores(entry: dict) -> str:
         lines.append(f"  Tableau Dashboard: {_tableau_url(entry['name'])}")
         return "\n".join(lines)
 
-    lines.append("  Scale: 1 (Strongly Disagree) to 5 (Strongly Agree)")
+    lines.append("  RATING SCALE: 1 = Strongly Disagree, 2 = Disagree, "
+                  "3 = Neutral, 4 = Agree, 5 = Strongly Agree")
+    lines.append("  (Higher scores are better — they mean students agreed "
+                  "more favorably with each statement.)")
     lines.append("")
 
     valid_scores = [s for s in scores if s is not None]

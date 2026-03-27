@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
-from utils.constants import SESSION_TTL_SECONDS
+from utils.constants import SESSION_TTL_SECONDS, INTRO_MESSAGE
 
 
 @dataclass
@@ -36,10 +36,17 @@ def _prune_expired() -> None:
 
 
 def create_session(user_sub: str) -> str:
-    """Create a new session for *user_sub* and return the session id."""
+    """Create a new session for *user_sub* and return the session id.
+
+    Seeds the conversation with the assistant intro message so the model
+    always has context about its capabilities.
+    """
     _prune_expired()
     session_id = uuid.uuid4().hex
-    _store[session_id] = _Session(user_sub=user_sub)
+    _store[session_id] = _Session(
+        user_sub=user_sub,
+        messages=[{"role": "assistant", "content": INTRO_MESSAGE}],
+    )
     return session_id
 
 
