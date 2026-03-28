@@ -2,8 +2,10 @@
 Public chat room controller.
 
 Replaces the Socket.io real-time chat from server.js with SSE receive + REST
-send.  An in-process pub/sub fan-out broadcasts new messages and active-user
-count changes to every connected SSE client.
+send.  An in-process pub/sub fan-out broadcasts new messages to every
+connected SSE client.
+
+Active-user presence tracking has moved to ``api.controllers.active_users``.
 
 NOTE: The subscriber set lives in process memory.  For multi-container ECS
 deployments, swap the broadcast mechanism for Redis pub/sub.
@@ -23,7 +25,7 @@ from fastapi import HTTPException, status
 
 from api.models.chat_room import ChatMessage, LoadMessagesResponse
 from utils.constants import MESSAGE_MAX_LENGTH, MESSAGES_BATCH_SIZE
-from utils.dynamo import chat_table, metrics_table, users_table
+from utils.dynamo import chat_table, users_table
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -32,7 +34,6 @@ logger = logging.getLogger("uvicorn.error")
 # ---------------------------------------------------------------------------
 
 _subscribers: set[asyncio.Queue[dict[str, str]]] = set()
-_active_users: int = 0
 
 
 def _subscribe() -> asyncio.Queue[dict[str, str]]:
@@ -50,50 +51,14 @@ async def _broadcast(event: dict[str, str]) -> None:
         await queue.put(event)
 
 
-async def _broadcast_active_users() -> None:
-    await _broadcast({
-        "event": "active_users",
-        "data": json.dumps({"active_users": _active_users}),
-    })
-
-
-def _update_daily_user_count() -> None:
-    """Increment today's connection counter in the metrics table."""
-    now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M:%S.%fZ")
-
-    try:
-        metrics_table.update_item(
-            Key={"type": f"UserCount-{today}", "name": "Connections"},
-            UpdateExpression=(
-                "SET #cnt = if_not_exists(#cnt, :zero) + :inc, "
-                "lastUpdated = :time"
-            ),
-            ExpressionAttributeNames={"#cnt": "count"},
-            ExpressionAttributeValues={
-                ":zero": 0,
-                ":inc": 1,
-                ":time": time_str,
-            },
-        )
-    except Exception:
-        logger.exception("Unable to update daily user count")
-
-
 # ---------------------------------------------------------------------------
 # SSE event stream
 # ---------------------------------------------------------------------------
 
 
 async def event_stream(user: dict[str, Any]) -> AsyncGenerator[dict[str, str], None]:
-    """SSE generator: yields ``message`` and ``active_users`` events."""
-    global _active_users
-
+    """SSE generator: yields ``message`` events."""
     queue = _subscribe()
-    _active_users += 1
-    _update_daily_user_count()
-    await _broadcast_active_users()
 
     try:
         while True:
@@ -103,8 +68,6 @@ async def event_stream(user: dict[str, Any]) -> AsyncGenerator[dict[str, str], N
         pass
     finally:
         _unsubscribe(queue)
-        _active_users -= 1
-        await _broadcast_active_users()
 
 
 # ---------------------------------------------------------------------------

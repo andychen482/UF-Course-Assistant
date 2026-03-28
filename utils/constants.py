@@ -43,7 +43,14 @@ MESSAGE_MAX_LENGTH: int = 250
 # CORS
 # ---------------------------------------------------------------------------
 
-ALLOWED_ORIGINS: list[str] = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+_raw_origins = os.environ.get("ALLOWED_ORIGINS", "")
+if not _raw_origins:
+    raise RuntimeError(
+        "ALLOWED_ORIGINS environment variable is required. "
+        "Set it to a comma-separated list of allowed origins "
+        "(e.g. 'http://localhost:3000,https://ufscheduler.com')."
+    )
+ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 # ---------------------------------------------------------------------------
 # Assistant intro (seeded as the first message in every new conversation)
