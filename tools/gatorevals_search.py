@@ -34,16 +34,16 @@ _COURSE_CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_courses.csv")
 _TABLEAU_URL = "https://gatorevals.aa.ufl.edu/public-results/"
 
 _QUESTIONS = [
-    "Overall, this course was a valuable educational experience",
-    "Course activities improved ability to analyze, solve problems, think critically",
-    "The course fostered regular interaction between student and instructor",
-    "Course content (readings, activities, assignments) was relevant & useful",
-    "The instructor was instrumental to my learning in the course",
-    "The instructor provided prompt and meaningful feedback",
-    "The instructor fostered a positive learning environment that engaged students",
-    "The instructor maintained clear standards for response and availability",
-    "The instructor explained material clearly and enhanced understanding",
     "The instructor was enthusiastic about the course",
+    "The instructor explained material clearly and enhanced understanding",
+    "The instructor maintained clear standards for response and availability",
+    "The instructor fostered a positive learning environment that engaged students",
+    "The instructor provided prompt and meaningful feedback",
+    "The instructor was instrumental to my learning in the course",
+    "Course content (readings, activities, assignments) was relevant & useful",
+    "The course fostered regular interaction between student and instructor",
+    "Course activities improved ability to analyze, solve problems, think critically",
+    "Overall, this course was a valuable educational experience",
 ]
 
 # ---------------------------------------------------------------------------
@@ -260,7 +260,7 @@ def _avg(scores: list) -> float | None:
 def _score_lines(scores: list) -> list[str]:
     """Return per-question lines for a score list."""
     lines = []
-    for i, (question, score) in enumerate(zip(_QUESTIONS, scores), 1):
+    for i, (question, score) in enumerate(zip(_QUESTIONS, reversed(scores)), 1):
         val = f"{score}/5" if score is not None else "N/A"
         lines.append(f"  Q{i}. {question}")
         lines.append(f"      Score: {val}")
@@ -355,7 +355,7 @@ def _format_comparison(instructor: dict, course: dict) -> str:
 
     # Per-question comparison table
     for i, (question, i_s, c_s) in enumerate(
-        zip(_QUESTIONS, i_scores, c_scores), 1
+        zip(_QUESTIONS, reversed(i_scores), reversed(c_scores)), 1
     ):
         i_str = f"{i_s}" if i_s is not None else "N/A"
         c_str = f"{c_s}" if c_s is not None else "N/A"
