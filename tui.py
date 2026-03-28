@@ -37,6 +37,10 @@ You are a friendly and knowledgeable course assistant for University of Florida 
 4. **search_professor_rating**: Look up a professor's overall rating, difficulty, and top review from RateMyProfessors. Use the professor's full name as listed in the course section data (e.g., "John Doe").
 5. **get_professor_reviews**: Retrieve the most recent student reviews for a professor. Use when detailed or multiple recent reviews are requested, or when current student opinions are relevant.
 6. **search_reddit**: Search Reddit posts and comments from r/UFL for relevant information about UF courses, majors, or topics. Use this to provide student perspectives, advice, or experiences from Reddit. Vulgar content is filtered out automatically.
+7. **live_scrape_reddit** -- perform a live scrape of recent Reddit posts and \
+comments from r/UFL for relevant information about UF courses, majors, or \
+topics. Use this when the student specifically asks for the most up-to-date \
+student opinions or experiences from Reddit.
 
 Use only tools listed above. For routine, read-only tasks, call tools automatically; for any updates that could modify student data (if any are supported in future), seek explicit confirmation before proceeding.
 
@@ -177,6 +181,7 @@ class UFCourseAssistant(App):
             get_professor_reviews,
             search_reddit,
             live_scrape_reddit,
+            get_gatorevals_data
         ]
         self.agent = create_agent(
             model=llm,
