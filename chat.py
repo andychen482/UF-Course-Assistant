@@ -14,7 +14,7 @@ from langchain.agents import create_agent
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
 from tools.reddit_search import search_reddit, live_scrape_reddit
-from tools.gatorevals_search import search_gatorevals
+from tools.gatorevals_search import search_gatorevals, search_gatorevals_course
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -89,6 +89,12 @@ evaluation questions covering course quality, instructor effectiveness, \
 feedback, and enthusiasm. Also provides a direct link to the GatorEvals \
 Tableau dashboard. Use the instructor's name as it appears in course \
 section data (e.g. "Amanpreet Kapoor").
+9. **search_gatorevals_course** -- look up GatorEvals evaluation scores for a \
+specific course by course code (e.g. "COP3530") or course name (e.g. "Data \
+Structures"). Optionally provide an instructor name to get a side-by-side \
+comparison of the instructor's scores vs. the course-wide average. Use this \
+when a student asks about evaluations for a course, or wants to compare an \
+instructor against the course overall.
 
 ═══════════════════════════════════════════════════════════
 TOOL USAGE GUIDELINES
@@ -106,9 +112,13 @@ call get_professor_reviews only if the student asks for more detail or recent \
 reviews.
 - GatorEvals / teaching evaluations: call search_gatorevals when a student \
 asks about an instructor's teaching evaluations, GatorEvals, or how well \
-someone teaches. ONLY return GatorEvals data -- do NOT also call \
-search_professor_rating or any other tool unless the student explicitly \
-asks for RateMyProfessors or additional information.
+someone teaches. Call search_gatorevals_course when the student asks about \
+evaluations for a specific course by code or name. When the student asks \
+about both an instructor AND a course, call search_gatorevals_course with \
+both the query and instructor_name to get a side-by-side comparison. \
+ONLY return GatorEvals data -- do NOT also call search_professor_rating \
+or any other tool unless the student explicitly asks for RateMyProfessors \
+or additional information.
 - Student opinions or experiences: call search_reddit first; only include \
 content that appeared in the tool result.
 - Section comparison: call get_course_sections to retrieve the data, then \
@@ -120,10 +130,12 @@ subtitles), list all matches returned by the tool and let the student choose.
 ═══════════════════════════════════════════════════════════
 GATOREVALS RATING SCALE
 ═══════════════════════════════════════════════════════════
-When presenting GatorEvals data, ALWAYS explain the rating scale to the \
-student: scores are on a 1-5 scale where 1 = Strongly Disagree and \
-5 = Strongly Agree. A higher score means students rated the instructor or \
-course more favorably on that question.
+When presenting GatorEvals data (instructor or course), ALWAYS explain the \
+rating scale to the student: scores are on a 1-5 scale where 1 = Strongly \
+Disagree and 5 = Strongly Agree. A higher score means students rated the \
+instructor or course more favorably on that question. When showing a \
+comparison, highlight the overall difference and whether the instructor \
+scores above or below the course average.
 
 ═══════════════════════════════════════════════════════════
 PRESENTATION
@@ -155,6 +167,7 @@ def build_agent():
         search_reddit,
         live_scrape_reddit,
         search_gatorevals,
+        search_gatorevals_course,
     ]
 
     agent = create_agent(

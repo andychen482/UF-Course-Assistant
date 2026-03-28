@@ -1,9 +1,10 @@
 """
-LangChain tool for looking up instructor evaluation data from GatorEvals.
+LangChain tools for looking up GatorEvals evaluation data by instructor
+or by course.
 
-Reads pre-scraped evaluation scores from gatorevals_all_instructors.csv and
-provides instant lookups with fuzzy name matching. Also generates a direct
-link to the Tableau dashboard filtered to the instructor.
+Reads pre-scraped evaluation scores from:
+  - gatorevals_all_instructors.csv  (instructor-level averages)
+  - gatorevals_all_courses.csv      (course-level averages)
 
 Scale: 1 = Strongly Disagree … 5 = Strongly Agree
 """
@@ -18,6 +19,7 @@ from langchain_core.tools import tool
 
 _DATA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_instructors.csv")
+_COURSE_CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_courses.csv")
 
 # Raw Tableau Public URL -- used internally by scrapers, kept for reference.
 # _TABLEAU_URL = (
@@ -46,10 +48,11 @@ _QUESTIONS = [
 # ---------------------------------------------------------------------------
 
 _instructors: dict[str, dict] | None = None
+_courses: dict[str, dict] | None = None
 
 
 def _load_data() -> dict[str, dict]:
-    """Load CSV into a dict keyed by uppercase instructor name."""
+    """Load instructor CSV into a dict keyed by uppercase instructor name."""
     global _instructors
     if _instructors is not None:
         return _instructors
@@ -71,6 +74,39 @@ def _load_data() -> dict[str, dict]:
                 "scores": scores,
             }
     return _instructors
+
+
+def _load_courses() -> dict[str, dict]:
+    """Load course CSV.
+
+    Returns a dict keyed by uppercase course_code (e.g. "COP3530").
+    Each value also stores the course_name so we can search by title.
+    """
+    global _courses
+    if _courses is not None:
+        return _courses
+
+    _courses = {}
+    with open(_COURSE_CSV_PATH, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            code = row["course_code"].strip()
+            name = row["course_name"].strip()
+            if not code:
+                continue
+            scores = []
+            for i in range(1, 11):
+                val = row.get(f"q{i}", "").strip()
+                scores.append(round(float(val), 2) if val else None)
+            entry = {
+                "code": code,
+                "name": name,
+                "combined": row.get("combined", "").strip(),
+                "idx": int(row["idx"]),
+                "scores": scores,
+            }
+            _courses[code.upper()] = entry
+    return _courses
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +176,61 @@ def _match_instructor(query: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Course matching
+# ---------------------------------------------------------------------------
+
+def _match_course(query: str) -> list[dict]:
+    """Find courses matching a course code or course name.
+
+    Supports:
+      - Exact code match: "COP3530"
+      - Code with space: "COP 3530"
+      - Partial code / prefix: "COP3"  or "COP"
+      - Name keyword search: "Data Structures"
+    """
+    courses = _load_courses()
+    q = _normalize(query)
+
+    # 1. Exact code match (with or without space)
+    q_nospace = q.replace(" ", "")
+    if q_nospace in courses:
+        return [courses[q_nospace]]
+
+    # Also try the original (with space) in case CSV keys have spaces
+    if q in courses:
+        return [courses[q]]
+
+    # 2. Code prefix match (e.g. "COP3" matches "COP3502", "COP3530" …)
+    if q_nospace.replace("-", "").isalnum() and any(c.isdigit() for c in q_nospace):
+        prefix_matches = [
+            e for code, e in courses.items()
+            if code.startswith(q_nospace)
+        ]
+        if prefix_matches:
+            return sorted(prefix_matches, key=lambda e: e["code"])[:10]
+
+    # 3. Name keyword search — every query token must appear in the course name
+    q_tokens = set(q.replace(",", " ").split())
+    name_matches = []
+    for entry in courses.values():
+        name_upper = entry["name"].upper()
+        if all(tok in name_upper for tok in q_tokens):
+            name_matches.append(entry)
+
+    if name_matches:
+        return sorted(name_matches, key=lambda e: e["code"])[:10]
+
+    # 4. Partial: any query token appears in either code or name
+    partial = []
+    for code, entry in courses.items():
+        combined = code + " " + entry["name"].upper()
+        if any(tok in combined for tok in q_tokens):
+            partial.append(entry)
+
+    return sorted(partial, key=lambda e: e["code"])[:10]
+
+
+# ---------------------------------------------------------------------------
 # Tableau URL generation
 # ---------------------------------------------------------------------------
 
@@ -155,15 +246,38 @@ def _tableau_url() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Formatting
+# Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _format_scores(entry: dict) -> str:
+def _avg(scores: list) -> float | None:
+    valid = [s for s in scores if s is not None]
+    return round(sum(valid) / len(valid), 2) if valid else None
+
+
+def _score_lines(scores: list) -> list[str]:
+    """Return per-question lines for a score list."""
+    lines = []
+    for i, (question, score) in enumerate(zip(_QUESTIONS, scores), 1):
+        val = f"{score}/5" if score is not None else "N/A"
+        lines.append(f"  Q{i}. {question}")
+        lines.append(f"      Score: {val}")
+    return lines
+
+
+_SCALE_LEGEND = (
+    "  RATING SCALE: 1 = Strongly Disagree, 2 = Disagree, "
+    "3 = Neutral, 4 = Agree, 5 = Strongly Agree\n"
+    "  (Higher scores are better — they mean students agreed "
+    "more favorably with each statement.)"
+)
+
+
+def _format_instructor_scores(entry: dict) -> str:
     """Format an instructor's GatorEvals scores into readable text."""
     scores = entry["scores"]
     has_data = any(s is not None for s in scores)
 
-    lines = [f"GatorEvals: {entry['name']}"]
+    lines = [f"GatorEvals — Instructor: {entry['name']}"]
 
     if not has_data:
         lines.append("  No evaluation data available for this instructor.")
@@ -171,30 +285,115 @@ def _format_scores(entry: dict) -> str:
         lines.append(f"  (Search for \"{entry['name']}\" in the Instructor filter)")
         return "\n".join(lines)
 
-    lines.append("  RATING SCALE: 1 = Strongly Disagree, 2 = Disagree, "
-                  "3 = Neutral, 4 = Agree, 5 = Strongly Agree")
-    lines.append("  (Higher scores are better — they mean students agreed "
-                  "more favorably with each statement.)")
+    lines.append(_SCALE_LEGEND)
     lines.append("")
+    lines.extend(_score_lines(scores))
 
-    valid_scores = [s for s in scores if s is not None]
-    overall_avg = round(sum(valid_scores) / len(valid_scores), 2) if valid_scores else None
-
-    for i, (question, score) in enumerate(zip(_QUESTIONS, scores), 1):
-        if score is not None:
-            lines.append(f"  Q{i}. {question}")
-            lines.append(f"      Score: {score}/5")
-        else:
-            lines.append(f"  Q{i}. {question}")
-            lines.append(f"      Score: N/A")
-
-    if overall_avg is not None:
+    overall = _avg(scores)
+    if overall is not None:
         lines.append("")
-        lines.append(f"  Average across all questions: {overall_avg}/5")
+        lines.append(f"  Average across all questions: {overall}/5")
 
     lines.append(f"\n  Tableau Dashboard: {_tableau_url()}")
     lines.append(f"  (Search for \"{entry['name']}\" in the Instructor filter)")
+    return "\n".join(lines)
 
+
+def _format_course_scores(entry: dict) -> str:
+    """Format a course's GatorEvals scores into readable text."""
+    scores = entry["scores"]
+    has_data = any(s is not None for s in scores)
+    label = f"{entry['code']} — {entry['name']}"
+
+    lines = [f"GatorEvals — Course: {label}"]
+
+    if not has_data:
+        lines.append("  No evaluation data available for this course.")
+        lines.append(f"  Tableau Dashboard: {_tableau_url()}")
+        lines.append(f"  (Search for \"{entry['code']}\" in the Course filter)")
+        return "\n".join(lines)
+
+    lines.append(_SCALE_LEGEND)
+    lines.append("")
+    lines.extend(_score_lines(scores))
+
+    overall = _avg(scores)
+    if overall is not None:
+        lines.append("")
+        lines.append(f"  Average across all questions: {overall}/5")
+
+    lines.append(f"\n  Tableau Dashboard: {_tableau_url()}")
+    lines.append(f"  (Search for \"{entry['code']}\" in the Course filter)")
+    return "\n".join(lines)
+
+
+def _format_comparison(instructor: dict, course: dict) -> str:
+    """Compare an instructor's scores against the course-wide average."""
+    i_scores = instructor["scores"]
+    c_scores = course["scores"]
+    i_has = any(s is not None for s in i_scores)
+    c_has = any(s is not None for s in c_scores)
+
+    label_i = instructor["name"]
+    label_c = f"{course['code']} — {course['name']}"
+
+    lines = [
+        f"GatorEvals Comparison",
+        f"  Instructor: {label_i}",
+        f"  Course:     {label_c}",
+        "",
+        _SCALE_LEGEND,
+        "",
+    ]
+
+    if not i_has and not c_has:
+        lines.append("  No evaluation data available for either the instructor or the course.")
+        return "\n".join(lines)
+
+    # Per-question comparison table
+    for i, (question, i_s, c_s) in enumerate(
+        zip(_QUESTIONS, i_scores, c_scores), 1
+    ):
+        i_str = f"{i_s}" if i_s is not None else "N/A"
+        c_str = f"{c_s}" if c_s is not None else "N/A"
+
+        diff_str = ""
+        if i_s is not None and c_s is not None:
+            diff = round(i_s - c_s, 2)
+            sign = "+" if diff > 0 else ""
+            diff_str = f"  ({sign}{diff})"
+
+        lines.append(f"  Q{i}. {question}")
+        lines.append(f"      Instructor: {i_str}   Course avg: {c_str}{diff_str}")
+
+    # Overall summary
+    i_avg = _avg(i_scores)
+    c_avg = _avg(c_scores)
+    lines.append("")
+    if i_avg is not None and c_avg is not None:
+        diff = round(i_avg - c_avg, 2)
+        sign = "+" if diff > 0 else ""
+        if diff > 0:
+            verdict = "above"
+        elif diff < 0:
+            verdict = "below"
+        else:
+            verdict = "equal to"
+        lines.append(
+            f"  Instructor overall avg: {i_avg}/5  |  "
+            f"Course overall avg: {c_avg}/5  |  "
+            f"Diff: {sign}{diff}"
+        )
+        lines.append(
+            f"  → This instructor scores {verdict} the course-wide average."
+        )
+    else:
+        if i_avg is not None:
+            lines.append(f"  Instructor overall avg: {i_avg}/5")
+        if c_avg is not None:
+            lines.append(f"  Course overall avg: {c_avg}/5")
+
+    lines.append(f"\n  Tableau Dashboard: {_tableau_url()}")
     return "\n".join(lines)
 
 
@@ -209,7 +408,7 @@ def search_gatorevals(instructor_name: str) -> str:
     GatorEvals is UF's official course evaluation system. Returns average
     scores (1-5 scale) for 10 evaluation questions covering course quality,
     instructor effectiveness, feedback, and enthusiasm. Also provides a
-    direct link to the GatorEvals Tableau dashboard filtered to the instructor.
+    direct link to the GatorEvals Tableau dashboard.
 
     Use this tool when a student asks about an instructor's teaching
     evaluations, GatorEvals scores, or how well an instructor teaches.
@@ -234,7 +433,7 @@ def search_gatorevals(instructor_name: str) -> str:
         )
 
     if len(matches) == 1:
-        return _format_scores(matches[0])
+        return _format_instructor_scores(matches[0])
 
     # Multiple matches
     lines = [
@@ -242,13 +441,71 @@ def search_gatorevals(instructor_name: str) -> str:
         "",
     ]
     for entry in matches:
-        scores = entry["scores"]
-        valid = [s for s in scores if s is not None]
-        avg = round(sum(valid) / len(valid), 2) if valid else None
+        avg = _avg(entry["scores"])
         avg_str = f"{avg}/5 avg" if avg else "No data"
         lines.append(f"  - {entry['name']} ({avg_str})")
 
     lines.append("")
     lines.append("Use the full name (e.g. the LASTNAME,FIRSTNAME format) for detailed scores.")
 
+    return "\n".join(lines)
+
+
+@tool
+def search_gatorevals_course(query: str, instructor_name: str = "") -> str:
+    """Look up GatorEvals evaluation scores for a UF course, and optionally
+    compare them against a specific instructor's scores.
+
+    Returns course-wide average scores (1-5 scale) for 10 evaluation
+    questions.  When an instructor_name is also provided, shows a
+    side-by-side comparison so the student can see whether that instructor
+    scores above or below the course average.
+
+    Use this tool when a student asks about evaluations for a specific
+    course (by code or name), or when they ask how a professor compares
+    to the course overall.
+
+    Args:
+        query: Course code (e.g. "COP3530", "COP 3530") or course name
+               keywords (e.g. "Data Structures").
+        instructor_name: Optional instructor name for comparison. If
+                         provided, the response includes an instructor-vs-course
+                         comparison.
+    """
+    q = query.strip()
+    if not q:
+        return "Please provide a course code or name to search."
+
+    course_matches = _match_course(q)
+
+    if not course_matches:
+        return (
+            f'No GatorEvals course data found for "{query}". '
+            "Try the full course code (e.g. \"COP3530\") or a course "
+            "name keyword (e.g. \"Data Structures\")."
+        )
+
+    # If instructor provided, attempt comparison with the best course match
+    instr = instructor_name.strip()
+    if instr:
+        instr_matches = _match_instructor(instr)
+        if instr_matches:
+            # Use first course match and first instructor match
+            return _format_comparison(instr_matches[0], course_matches[0])
+
+    if len(course_matches) == 1:
+        return _format_course_scores(course_matches[0])
+
+    # Multiple course matches — list them
+    lines = [
+        f'Found {len(course_matches)} course(s) matching "{query}":',
+        "",
+    ]
+    for entry in course_matches:
+        avg = _avg(entry["scores"])
+        avg_str = f"{avg}/5 avg" if avg else "No data"
+        lines.append(f"  - {entry['code']} — {entry['name']} ({avg_str})")
+
+    lines.append("")
+    lines.append("Use the full course code for detailed scores.")
     return "\n".join(lines)
