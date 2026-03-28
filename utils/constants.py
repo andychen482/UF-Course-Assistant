@@ -70,5 +70,6 @@ INTRO_MESSAGE: str = (
     "link to the Tableau dashboard\n"
     "- **Reddit Opinions** -- Search r/UFL for real student experiences and opinions\n"
     "\n"
+    "- **Scheduler Actions** -- Add or remove courses from the scheduler\n"
     "What can I help you with?"
 )
