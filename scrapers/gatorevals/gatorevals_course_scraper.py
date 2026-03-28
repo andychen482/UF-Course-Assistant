@@ -11,7 +11,7 @@ Each course is formatted as "<COURSECODE>,<COURSENAME>" in the dashboard.
 Scrapes both the 10 question averages AND the course name in one pass.
 
 Usage:
-    python tools/gatorevals_course_scraper.py [--visible] [--delay 0.5]
+    python scrapers/gatorevals/gatorevals_course_scraper.py [--visible] [--delay 0.5]
 """
 
 import argparse
@@ -49,8 +49,9 @@ TABLEAU_EMBED_URL = (
     "&:display_count=yes&:language=en-US&:loadOrderID=0"
 )
 
-CHECKPOINT_FILE = "gatorevals_courses_checkpoint.json"
-OUTPUT_CSV = "gatorevals_all_courses.csv"
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHECKPOINT_FILE = os.path.join(_SCRIPT_DIR, "gatorevals_courses_checkpoint.json")
+OUTPUT_CSV = os.path.join(_SCRIPT_DIR, "gatorevals_all_courses.csv")
 SAVE_EVERY = 50
 
 VALUE_LABELS = [

@@ -6,7 +6,7 @@ Scrapes evaluation scores for ALL ~7,343 instructors from the GatorEvals
 Tableau Public dashboard using a single Selenium Chrome session.
 
 Usage:
-    python tools/gatorevals_bulk_scraper.py [--visible] [--delay 1.5]
+    python scrapers/gatorevals/gatorevals_bulk_scraper.py [--visible] [--delay 1.5]
 """
 
 import argparse
@@ -44,8 +44,9 @@ TABLEAU_EMBED_URL = (
     "&:display_count=yes&:language=en-US&:loadOrderID=0"
 )
 
-CHECKPOINT_FILE = "gatorevals_checkpoint.json"
-OUTPUT_CSV = "gatorevals_all_instructors.csv"
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CHECKPOINT_FILE = os.path.join(_SCRIPT_DIR, "gatorevals_checkpoint.json")
+OUTPUT_CSV = os.path.join(_SCRIPT_DIR, "gatorevals_all_instructors.csv")
 SAVE_EVERY = 50
 
 VALUE_LABELS = [
@@ -610,7 +611,7 @@ def main():
         print("Navigating to Tableau dashboard...")
         session_id, gsh, bootstrap_text = init_session(driver)
 
-        with open("bootstrap_debug.txt", "w", encoding="utf-8") as f:
+        with open(os.path.join(_SCRIPT_DIR, "bootstrap_debug.txt"), "w", encoding="utf-8") as f:
             f.write(bootstrap_text)
 
         instructors = parse_instructor_names(bootstrap_text)

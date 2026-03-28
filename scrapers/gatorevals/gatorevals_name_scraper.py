@@ -9,7 +9,7 @@ Outputs: gatorevals_instructor_names.json  (dict of idx -> name)
          gatorevals_instructor_names.csv   (idx, name)
 
 Usage:
-    python tools/gatorevals_name_scraper.py [--visible] [--delay 0.8]
+    python scrapers/gatorevals/gatorevals_name_scraper.py [--visible] [--delay 0.8]
 """
 
 import argparse
@@ -47,9 +47,10 @@ TABLEAU_EMBED_URL = (
     "&:display_count=yes&:language=en-US&:loadOrderID=0"
 )
 
-OUTPUT_JSON = "gatorevals_instructor_names.json"
-OUTPUT_CSV = "gatorevals_instructor_names.csv"
-CHECKPOINT_FILE = "gatorevals_names_checkpoint.json"
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_JSON = os.path.join(_SCRIPT_DIR, "gatorevals_instructor_names.json")
+OUTPUT_CSV = os.path.join(_SCRIPT_DIR, "gatorevals_instructor_names.csv")
+CHECKPOINT_FILE = os.path.join(_SCRIPT_DIR, "gatorevals_names_checkpoint.json")
 SAVE_EVERY = 100
 
 

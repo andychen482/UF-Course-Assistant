@@ -3,8 +3,8 @@ LangChain tools for looking up GatorEvals evaluation data by instructor
 or by course.
 
 Reads pre-scraped evaluation scores from:
-  - gatorevals_all_instructors.csv  (instructor-level averages)
-  - gatorevals_all_courses.csv      (course-level averages)
+  - scrapers/gatorevals/gatorevals_all_instructors.csv  (instructor-level averages)
+  - scrapers/gatorevals/gatorevals_all_courses.csv      (course-level averages)
 
 Scale: 1 = Strongly Disagree … 5 = Strongly Agree
 """
@@ -17,7 +17,10 @@ from langchain_core.tools import tool
 # Constants
 # ---------------------------------------------------------------------------
 
-_DATA_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "scrapers", "gatorevals",
+)
 _CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_instructors.csv")
 _COURSE_CSV_PATH = os.path.join(_DATA_DIR, "gatorevals_all_courses.csv")
 
