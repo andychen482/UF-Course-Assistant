@@ -69,7 +69,7 @@ INTRO_MESSAGE: str = (
     "(1-5 scale, where 1 = Strongly Disagree and 5 = Strongly Agree) with a direct "
     "link to the Tableau dashboard\n"
     "- **Reddit Opinions** -- Search r/UFL for real student experiences and opinions\n"
-    "\n"
     "- **Scheduler Actions** -- Add or remove courses from the scheduler\n"
+    "\n"
     "What can I help you with?"
 )
