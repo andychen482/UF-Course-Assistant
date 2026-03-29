@@ -418,6 +418,20 @@ def search_gatorevals(instructor_name: str) -> str:
     Provide the instructor's name as it appears in the course catalog
     (e.g. "Amanpreet Kapoor" or "KAPOOR,AMANPREET").
 
+    IMPORTANT — how to present results to the student:
+    - On the FIRST GatorEvals-related response in a conversation, briefly
+      explain the rating scale: 1 = Strongly Disagree … 5 = Strongly Agree,
+      where higher scores mean students rated the instructor/course more
+      favorably. This helps the student interpret the numbers.
+    - Do NOT just dump the raw scores. Use the scores as evidence to offer
+      genuine advice and opinions. For example, highlight standout strengths
+      (e.g. "Students rated their enthusiasm a 4.7 — that's excellent"),
+      flag potential concerns (e.g. "Feedback scores are below average at
+      3.1"), and give an overall recommendation based on the pattern of
+      scores and the student's specific question.
+    - When comparing instructors or deciding between sections, use the
+      scores to make a clear, actionable recommendation.
+
     Args:
         instructor_name: The instructor's name (e.g. "Amanpreet Kapoor").
     """
@@ -467,6 +481,20 @@ def search_gatorevals_course(query: str, instructor_name: str = "") -> str:
     Use this tool when a student asks about evaluations for a specific
     course (by code or name), or when they ask how a professor compares
     to the course overall.
+
+    IMPORTANT — how to present results to the student:
+    - On the FIRST GatorEvals-related response in a conversation, briefly
+      explain the rating scale: 1 = Strongly Disagree … 5 = Strongly Agree,
+      where higher scores mean students rated the course more favorably.
+    - Do NOT just dump the raw scores. Use the scores as evidence to offer
+      genuine advice and opinions. Highlight what the course does well
+      (e.g. "Students found the content highly relevant at 4.5") and flag
+      weaker areas (e.g. "Feedback timeliness scored only 3.2 — you may
+      want to be proactive about office hours"). Give an overall takeaway.
+    - When an instructor comparison is shown, interpret the differences
+      for the student and make a clear recommendation (e.g. "This
+      instructor scores above the course average in every category —
+      a strong pick for this class").
 
     Args:
         query: Course code (e.g. "COP3530", "COP 3530") or course name
