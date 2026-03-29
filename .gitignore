@@ -214,3 +214,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Reddit scraper ephemeral files
+scrapers/reddit_scrapes/runs/
