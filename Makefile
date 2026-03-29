@@ -20,7 +20,7 @@ run-mount: build
 		--name $(CONTAINER) \
 		-p $(PORT):8000 \
 		--env-file .env \
-		-v "$(shell powershell -Command \"Write-Output '$(CURDIR)' -replace '\\\\','/'\"):/app" \
+		-v $(CURDIR):/app \
 		$(IMAGE_NAME)
 
 stop:

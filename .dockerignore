@@ -35,6 +35,17 @@ htmlcov/
 Thumbs.db
 .DS_Store
 
+# Unused scraper artifacts in scrapers/gatorevals/
+scrapers/gatorevals/gatorevals_instructor_names.csv
+scrapers/gatorevals/tableau_response_debug.json
+scrapers/gatorevals/gatorevals_names_checkpoint.json
+scrapers/gatorevals/gatorevals_instructor_names.json
+scrapers/gatorevals/gatorevals_courses_checkpoint.json
+scrapers/gatorevals/gatorevals_checkpoint.json
+scrapers/gatorevals/bootstrap_raw.json
+scrapers/gatorevals/gator_evals_questions.txt
+scrapers/gatorevals/bootstrap_debug.txt
+
 # Build artifacts
 dist/
 build/

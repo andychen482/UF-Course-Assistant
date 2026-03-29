@@ -93,7 +93,7 @@ evaluation scores. Returns average scores (1-5 scale) across 10 official \
 evaluation questions covering course quality, instructor effectiveness, \
 feedback, and enthusiasm. Also provides a direct link to the GatorEvals \
 Tableau dashboard. Use the instructor's name as it appears in course \
-section data (e.g. "Amanpreet Kapoor").
+section data (e.g. "John Doe").
 9. **search_gatorevals_course** -- look up GatorEvals evaluation scores for a \
 specific course by course code (e.g. "COP3530") or course name (e.g. "Data \
 Structures"). Optionally provide an instructor name to get a side-by-side \
