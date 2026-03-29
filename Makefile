@@ -15,12 +15,11 @@ run: build
 		$(IMAGE_NAME)
 
 run-mount: build
-# Use PowerShell to convert Windows path to Docker-compatible format
 	docker run --rm \
 		--name $(CONTAINER) \
 		-p $(PORT):8000 \
 		--env-file .env \
-		-v $(CURDIR):/app \
+		-v "$(subst \,/,$(CURDIR)):/app" \
 		$(IMAGE_NAME)
 
 stop:
