@@ -12,7 +12,7 @@ import re
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from langchain_core.tools import tool
-from tools.course_search import search_courses_by_code
+from tools.course_data import search_by_code, search_by_name
 import requests
 import time
 
@@ -77,6 +77,15 @@ def _extract_course_codes(text: str) -> list[str]:
     return codes
 
 
+def _add_code_variants(code: str, phrases: list[str]) -> None:
+    """Append all case/spacing variants of a course code to *phrases*."""
+    code_upper = code.upper()
+    code_withspace = re.sub(r"([A-Z]+)(\d+)", r"\1 \2", code_upper)
+    for variant in [code_upper, code_withspace, code_upper.lower(), code_withspace.lower()]:
+        if variant not in phrases:
+            phrases.append(variant)
+
+
 def _expand_query(query: str) -> dict:
     """
     Expand the query into multiple search forms and keywords.
@@ -100,38 +109,36 @@ def _expand_query(query: str) -> dict:
 
     # 2. For each course code, add all variants as exact phrases
     for code in course_codes:
-        code_upper = code.upper()
-        code_withspace = re.sub(r"([A-Z]+)(\d+)", r"\1 \2", code_upper)
-        for variant in [code_upper, code_withspace, code_upper.lower(), code_withspace.lower()]:
-            if variant not in result["exact_phrases"]:
-                result["exact_phrases"].append(variant)
+        _add_code_variants(code, result["exact_phrases"])
 
     # 3. If no course codes found, treat the whole query as a phrase
+    #    and resolve it as a course name -> course codes
     if not course_codes:
         result["exact_phrases"].append(query_stripped)
-
-    # 4. Keywords from the full query (minus stop words)
-    result["keywords"] = _tokenize(query_stripped)
-
-    # 5. Try to resolve each course code to a course name
-    for code in course_codes:
         try:
-            course_results = search_courses_by_code.invoke({"course_code": code})
-            if isinstance(course_results, str):
-                import ast
-                try:
-                    course_results = ast.literal_eval(course_results)
-                except Exception:
-                    course_results = []
-            if isinstance(course_results, list):
-                for course in course_results:
-                    name = course.get("name") or course.get("title")
-                    if name:
-                        result["exact_phrases"].append(name)
-                        result["keywords"].update(_tokenize(name))
-                        break
+            for course in search_by_name(query_stripped, limit=3):
+                code = course.get("code", "")
+                if code and code not in result["course_codes"]:
+                    result["course_codes"].append(code)
+                    _add_code_variants(code, result["exact_phrases"])
         except Exception:
             pass
+
+    # 4. Resolve each course code -> course name so we query both
+    for code in course_codes:
+        try:
+            for course in search_by_code(code, limit=1):
+                name = course.get("name", "")
+                if name:
+                    if name not in result["exact_phrases"]:
+                        result["exact_phrases"].append(name)
+                    result["keywords"].update(_tokenize(name))
+                    break
+        except Exception:
+            pass
+
+    # 5. Keywords from the full query (minus stop words)
+    result["keywords"].update(_tokenize(query_stripped))
 
     return result
 
