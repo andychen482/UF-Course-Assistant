@@ -13,7 +13,7 @@ from langchain.agents import create_agent
 
 from tools.course_search import search_courses_by_code, search_courses_by_title, get_course_sections
 from tools.rmp_search import search_professor_rating, get_professor_reviews
-from tools.reddit_search import search_reddit, live_scrape_reddit
+from tools.reddit_search import search_reddit
 from tools.gatorevals_search import search_gatorevals, search_gatorevals_course
 from tools.scheduler_actions import (
     add_course_to_scheduler,
@@ -86,17 +86,13 @@ relevant information about UF courses, professors, majors, or topics. Results \
 are ranked by relevance and engagement (most active threads first). Vulgar \
 content is filtered out automatically. Works for course codes, professor names, \
 majors, and general academic topics.
-7. **live_scrape_reddit** -- perform a live scrape of recent Reddit posts and \
-comments from r/UFL for relevant information about UF courses, majors, or \
-topics. Use this when the student specifically asks for the most up-to-date \
-student opinions or experiences from Reddit. Results are sorted by engagement.
-8. **search_gatorevals** -- look up an instructor's GatorEvals teaching \
+7. **search_gatorevals** -- look up an instructor's GatorEvals teaching \
 evaluation scores. Returns average scores (1-5 scale) across 10 official \
 evaluation questions covering course quality, instructor effectiveness, \
 feedback, and enthusiasm. Also provides a direct link to the GatorEvals \
 Tableau dashboard. Use the instructor's name as it appears in course \
 section data (e.g. "John Doe").
-9. **search_gatorevals_course** -- look up GatorEvals evaluation scores for a \
+8. **search_gatorevals_course** -- look up GatorEvals evaluation scores for a \
 specific course by course code (e.g. "COP3530") or course name (e.g. "Data \
 Structures"). Optionally provide an instructor name to get a side-by-side \
 comparison of the instructor's scores vs. the course-wide average. Use this \
@@ -194,7 +190,6 @@ def build_agent():
         search_professor_rating,
         get_professor_reviews,
         search_reddit,
-        live_scrape_reddit,
         search_gatorevals,
         search_gatorevals_course,
         # Client-side action tools

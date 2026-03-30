@@ -160,24 +160,12 @@ def scrape_posts(subreddit, flair, since_ts, until_ts, max_posts, rate_limit):
 
 # ---------- merge ----------
 def merge_into_master(subreddit: str, new_posts: List[dict]):
-    master_path = os.path.join(MASTER_DIR, MASTER_FILE_TEMPLATE.format(subreddit=subreddit))
-
-    if os.path.exists(master_path):
-        with open(master_path, "r", encoding="utf-8") as f:
-            master = json.load(f)
-    else:
-        master = {"posts": {}, "meta": {"created": datetime.utcnow().isoformat()}}
-
-    for post in new_posts:
-        master["posts"][post["id"]] = post
-
-    master["meta"]["last_updated"] = datetime.utcnow().isoformat()
-    master["meta"]["total_posts"] = len(master["posts"])
-
-    with open(master_path, "w", encoding="utf-8") as f:
-        json.dump(master, f, indent=2, ensure_ascii=False)
-
-    logging.info("Merged into master file: %s", master_path)
+    import reddit_db
+    reddit_db.init_db()
+    reddit_db.upsert_posts_batch(new_posts)
+    reddit_db.set_meta("last_updated", datetime.utcnow().isoformat())
+    reddit_db.set_meta("total_posts", str(reddit_db.get_post_count()))
+    logging.info("Merged %d posts into SQLite database", len(new_posts))
 
 
 # ---------- orchestrator ----------

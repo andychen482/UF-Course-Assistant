@@ -1,24 +1,20 @@
 """
 LangChain tool for searching Reddit posts/comments from r/UFL related to UF courses, majors, or topics.
 
-Searches the UFL_master.json file for relevant posts and comments, scores them by
+Searches a SQLite database with FTS5 for relevant posts and comments, scores them by
 relevance and engagement, filters out vulgar content, and returns rich context
 for the LLM to synthesize actionable advice.
 """
 
-import json
 import os
 import re
 
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from langchain_core.tools import tool
-from tools.course_search import search_courses_by_code
-import requests
-import time
+from tools.course_data import search_by_code, search_by_name
 
-# Path to the master Reddit data file
-REDDIT_MASTER_PATH = os.path.join("scrapers", "reddit_scrapes", "master", "UFL_master.json")
+from scrapers import reddit_db
 
 # Vulgarity filter (expand as needed)
 VULGAR_WORDS = [
@@ -26,6 +22,9 @@ VULGAR_WORDS = [
     "fag", "cock", "damn", "crap", "retard", "nigger", "nigga", "twat", "wank", "wanker"
 ]
 VULGAR_PATTERN = re.compile(r"\b(" + "|".join(re.escape(word) for word in VULGAR_WORDS) + r")\b", re.IGNORECASE)
+
+# Regex to extract UF course codes from any text (e.g. COP3530, CEN 3031, mac2311)
+_COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{2,4})\s?(\d{4}[A-Za-z]?)\b")
 
 # Common stop words to exclude from tokenized matching
 _STOP_WORDS = frozenset({
@@ -43,6 +42,9 @@ _STOP_WORDS = frozenset({
     "also", "then", "like", "really", "think", "know", "get", "got",
 })
 
+# FTS5 special tokens that must be stripped from user queries
+_FTS5_SPECIAL = re.compile(r'[*(){}[\]^~<>]')
+
 
 def _clean_text(text: str) -> str:
     """Remove vulgar words and excessive whitespace from text."""
@@ -58,49 +60,83 @@ def _tokenize(text: str) -> set[str]:
     return {w for w in words if w not in _STOP_WORDS and len(w) > 1}
 
 
+def _extract_course_codes(text: str) -> list[str]:
+    """Extract all UF course codes from text, returning normalized forms.
+
+    E.g. "CEN3031 and COP 4600" -> ["CEN3031", "COP4600"]
+    """
+    codes = []
+    for match in _COURSE_CODE_RE.finditer(text):
+        prefix = match.group(1).upper()
+        number = match.group(2).upper()
+        code = prefix + number
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _add_code_variants(code: str, phrases: list[str]) -> None:
+    """Append all case/spacing variants of a course code to *phrases*."""
+    code_upper = code.upper()
+    code_withspace = re.sub(r"([A-Z]+)(\d+)", r"\1 \2", code_upper)
+    for variant in [code_upper, code_withspace, code_upper.lower(), code_withspace.lower()]:
+        if variant not in phrases:
+            phrases.append(variant)
+
+
 def _expand_query(query: str) -> dict:
     """
     Expand the query into multiple search forms and keywords.
 
+    Handles both single course codes ("COP3530") AND natural language queries
+    ("are CEN3031, and COP4600 difficult to take together") by extracting
+    individual course codes from the text.
+
     Returns a dict with:
-      - exact_phrases: list of exact substrings to match (course code variants, full query)
+      - exact_phrases: list of exact substrings to match (course code variants, etc.)
       - keywords: set of meaningful tokens for fuzzy matching
-      - course_name: resolved course name if query is a course code
+      - course_codes: list of normalized course codes found in the query
     """
-    result = {"exact_phrases": [], "keywords": set(), "course_name": None}
+    result = {"exact_phrases": [], "keywords": set(), "course_codes": []}
 
     query_stripped = query.strip()
-    result["exact_phrases"].append(query_stripped)
 
-    # Course code variants (e.g. COP3530, COP 3530, cop3530)
-    code_nospace = query_stripped.replace(" ", "").upper()
-    code_withspace = re.sub(r"([A-Z]+)(\d+)", r"\1 \2", code_nospace)
-    for variant in [code_nospace, code_withspace, code_nospace.lower(), code_withspace.lower()]:
-        if variant not in result["exact_phrases"]:
-            result["exact_phrases"].append(variant)
+    # 1. Extract individual course codes from the query
+    course_codes = _extract_course_codes(query_stripped)
+    result["course_codes"] = course_codes
 
-    # Keywords from the query
-    result["keywords"] = _tokenize(query_stripped)
+    # 2. For each course code, add all variants as exact phrases
+    for code in course_codes:
+        _add_code_variants(code, result["exact_phrases"])
 
-    # Try to resolve course code to course name
-    try:
-        course_results = search_courses_by_code.invoke({"course_code": code_nospace})
-        if isinstance(course_results, str):
-            import ast
-            try:
-                course_results = ast.literal_eval(course_results)
-            except Exception:
-                course_results = []
-        if isinstance(course_results, list):
-            for course in course_results:
-                name = course.get("name") or course.get("title")
+    # 3. If no course codes found, treat the whole query as a phrase
+    #    and resolve it as a course name -> course codes
+    if not course_codes:
+        result["exact_phrases"].append(query_stripped)
+        try:
+            for course in search_by_name(query_stripped, limit=3):
+                code = course.get("code", "")
+                if code and code not in result["course_codes"]:
+                    result["course_codes"].append(code)
+                    _add_code_variants(code, result["exact_phrases"])
+        except Exception:
+            pass
+
+    # 4. Resolve each course code -> course name so we query both
+    for code in course_codes:
+        try:
+            for course in search_by_code(code, limit=1):
+                name = course.get("name", "")
                 if name:
-                    result["course_name"] = name
-                    result["exact_phrases"].append(name)
+                    if name not in result["exact_phrases"]:
+                        result["exact_phrases"].append(name)
                     result["keywords"].update(_tokenize(name))
                     break
-    except Exception:
-        pass
+        except Exception:
+            pass
+
+    # 5. Keywords from the full query (minus stop words)
+    result["keywords"].update(_tokenize(query_stripped))
 
     return result
 
@@ -132,51 +168,78 @@ def _score_text_match(text: str, expanded_query: dict) -> float:
     return score
 
 
-def _engagement_score(post: dict) -> float:
-    """Composite engagement score: upvotes + weighted comment count."""
-    return (post.get("score", 0) or 0) + (post.get("num_comments", 0) or 0) * 2
-
-
-_reddit_data_cache = None
-_reddit_data_cache_mtime = None
-
-def _load_reddit_data():
-    global _reddit_data_cache, _reddit_data_cache_mtime
-    try:
-        mtime = os.path.getmtime(REDDIT_MASTER_PATH)
-    except Exception:
-        return None
-    if _reddit_data_cache is not None and _reddit_data_cache_mtime == mtime:
-        return _reddit_data_cache
-    if not os.path.exists(REDDIT_MASTER_PATH):
-        _reddit_data_cache = None
-        _reddit_data_cache_mtime = None
-        return None
-    with open(REDDIT_MASTER_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    _reddit_data_cache = data
-    _reddit_data_cache_mtime = mtime
-    return data
+def _build_fts_query(expanded_query: dict) -> str:
+    """Build an FTS5 MATCH expression from expanded query phrases and keywords."""
+    parts = []
+    for phrase in expanded_query["exact_phrases"]:
+        safe = _FTS5_SPECIAL.sub('', phrase).replace('"', '""').strip()
+        if safe:
+            parts.append(f'"{safe}"')
+    for keyword in expanded_query["keywords"]:
+        safe = _FTS5_SPECIAL.sub('', keyword).replace('"', '""').strip()
+        if safe:
+            parts.append(safe)
+    return " OR ".join(parts) if parts else ""
 
 
 def _search_reddit(query: str, limit: int = 10) -> list[dict]:
     """
-    Search UFL_master.json for posts/comments relevant to the query.
+    Search the Reddit SQLite database for posts/comments relevant to the query.
 
-    Uses relevance scoring (exact phrase + keyword overlap) and ranks results
-    by a combination of relevance and engagement (score + comments).
+    Uses FTS5 for fast candidate retrieval, then re-ranks with scoring logic
+    (exact phrase + keyword overlap + engagement).
     """
-    data = _load_reddit_data()
-    if not data:
-        return []
+    reddit_db.init_db()
+    conn = reddit_db.get_connection()
 
     expanded = _expand_query(query)
-    scored_results = []
+    fts_query = _build_fts_query(expanded)
+    if not fts_query:
+        return []
 
-    for post in data.get("posts", {}).values():
-        title = post.get("title") or ""
-        selftext = post.get("selftext") or ""
-        flair = post.get("flair") or ""
+    # Phase 1: FTS5 candidate retrieval
+    candidate_ids = set()
+
+    try:
+        # Posts matching in title/selftext
+        post_rows = conn.execute("""
+            SELECT p.id FROM posts p
+            JOIN posts_fts ON posts_fts.rowid = p.rowid
+            WHERE posts_fts MATCH ?
+            ORDER BY rank
+            LIMIT 200
+        """, (fts_query,)).fetchall()
+        candidate_ids.update(row["id"] for row in post_rows)
+    except Exception:
+        pass
+
+    try:
+        # Posts with matching comments
+        comment_rows = conn.execute("""
+            SELECT DISTINCT c.post_id FROM comments c
+            JOIN comments_fts ON comments_fts.rowid = c.rowid
+            WHERE comments_fts MATCH ?
+            LIMIT 200
+        """, (fts_query,)).fetchall()
+        candidate_ids.update(row["post_id"] for row in comment_rows)
+    except Exception:
+        pass
+
+    if not candidate_ids:
+        return []
+
+    # Phase 2: Fetch full data and re-rank in Python
+    placeholders = ",".join("?" * len(candidate_ids))
+    id_list = list(candidate_ids)
+    posts = conn.execute(
+        f"SELECT * FROM posts WHERE id IN ({placeholders})", id_list
+    ).fetchall()
+
+    scored_results = []
+    for post in posts:
+        title = post["title"] or ""
+        selftext = post["selftext"] or ""
+        flair = post["flair"] or ""
 
         # Score the post itself (title weighted highest)
         relevance = (
@@ -185,16 +248,20 @@ def _search_reddit(query: str, limit: int = 10) -> list[dict]:
             + _score_text_match(flair, expanded) * 0.5
         )
 
-        # Score and collect matching comments
+        # Fetch and score comments
+        comments = conn.execute(
+            "SELECT * FROM comments WHERE post_id = ?", (post["id"],)
+        ).fetchall()
+
         scored_comments = []
-        for comment in post.get("comments", []) or []:
-            body = comment.get("body") or ""
+        for comment in comments:
+            body = comment["body"] or ""
             comment_relevance = _score_text_match(body, expanded)
             if comment_relevance > 0:
                 relevance += comment_relevance * 0.5
                 scored_comments.append({
                     "body": body,
-                    "score": comment.get("score", 0) or 0,
+                    "score": comment["score"] or 0,
                     "relevance": comment_relevance,
                 })
 
@@ -204,17 +271,18 @@ def _search_reddit(query: str, limit: int = 10) -> list[dict]:
         # Sort comments by score (engagement) then relevance
         scored_comments.sort(key=lambda c: (c["score"], c["relevance"]), reverse=True)
 
-        engagement = _engagement_score(post)
-        # Final ranking: relevance is primary, engagement is secondary
-        combined_score = relevance * 5.0 + engagement
+        engagement = (post["score"] or 0) + (post["num_comments"] or 0) * 2
+        # Relevance dominates ranking; engagement only matters as a tiebreaker
+        # to avoid low-relevance viral posts outranking exact matches
+        combined_score = relevance * 10.0 + min(engagement, relevance * 2.0)
 
         scored_results.append({
             "title": _clean_text(title),
             "flair": flair,
             "selftext": _clean_text(selftext),
-            "url": post.get("url", ""),
-            "post_score": post.get("score", 0) or 0,
-            "num_comments": post.get("num_comments", 0) or 0,
+            "url": post["url"] or "",
+            "post_score": post["score"] or 0,
+            "num_comments": post["num_comments"] or 0,
             "relevance": relevance,
             "combined_score": combined_score,
             "comments": [
@@ -257,134 +325,6 @@ def _format_reddit_results(results: list[dict], query: str) -> str:
 
 
 @tool
-def live_scrape_reddit(query: str, limit: int = 10) -> str:
-    """
-    Live scrape r/UFL for posts/comments relevant to the query (and course name if applicable),
-    append new results to UFL_master.json, and return formatted results.
-    Warn users that this may take 1-2 minutes.
-
-    IMPORTANT:
-    - Whenever a Reddit post is mentioned or referenced in the response, ALWAYS include the Reddit post URL.
-    - When a user asks about Reddit replies for a course or topic, return MULTIPLE posts with SHORT summaries (not a long discussion about a single post), unless only one post is most relevant or exactly matches the user's request.
-    - This tool is LIMITED to scraping a MAXIMUM of 10 posts from Reddit per query.
-    - Use the Reddit posts and comments as evidence to offer genuine advice and recommendations to the student — don't just summarize, actually help them make decisions.
-    """
-    expanded = _expand_query(query)
-    all_results = []
-    seen_ids = set()
-    headers = {"User-Agent": "ufl-course-assistant-live-scraper/1.0"}
-
-    for phrase in expanded["exact_phrases"]:
-        url = "https://www.reddit.com/r/UFL/search.json"
-        params = {
-            "q": phrase,
-            "restrict_sr": 1,
-            "sort": "relevance",
-            "limit": 10
-        }
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            continue
-        for c in data.get("data", {}).get("children", []):
-            p = c["data"]
-            pid = p["id"]
-            if pid in seen_ids:
-                continue
-            seen_ids.add(pid)
-            post = {
-                "id": pid,
-                "name": p.get("name"),
-                "title": p.get("title"),
-                "selftext": p.get("selftext"),
-                "author": p.get("author"),
-                "created_utc": p.get("created_utc"),
-                "score": p.get("score"),
-                "num_comments": p.get("num_comments"),
-                "flair": p.get("link_flair_text"),
-                "permalink": p.get("permalink"),
-                "url": p.get("url"),
-                "comments": [],
-                "raw": p
-            }
-            # Fetch top-level comments
-            try:
-                comm_url = f"https://www.reddit.com{p.get('permalink')}.json"
-                comm_resp = requests.get(comm_url, headers=headers, timeout=15)
-                comm_resp.raise_for_status()
-                comm_data = comm_resp.json()
-                if isinstance(comm_data, list) and len(comm_data) > 1:
-                    for node in comm_data[1]["data"]["children"]:
-                        if node.get("kind") == "t1":
-                            d = node["data"]
-                            comment = {
-                                "id": d.get("id"),
-                                "author": d.get("author"),
-                                "body": d.get("body"),
-                                "score": d.get("score"),
-                                "created_utc": d.get("created_utc"),
-                                "replies": []
-                            }
-                            post["comments"].append(comment)
-            except Exception:
-                pass
-            all_results.append(post)
-            if len(all_results) >= limit:
-                break
-        if len(all_results) >= limit:
-            break
-        time.sleep(2)  # avoid rate-limiting
-
-    # --- Merge into UFL_master.json ---
-    if os.path.exists(REDDIT_MASTER_PATH):
-        with open(REDDIT_MASTER_PATH, "r", encoding="utf-8") as f:
-            master = json.load(f)
-    else:
-        master = {"posts": {}, "meta": {"created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}
-
-    new_count = 0
-    for post in all_results:
-        if post["id"] not in master["posts"]:
-            master["posts"][post["id"]] = post
-            new_count += 1
-
-    master["meta"]["last_updated"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    master["meta"]["total_posts"] = len(master["posts"])
-
-    with open(REDDIT_MASTER_PATH, "w", encoding="utf-8") as f:
-        json.dump(master, f, indent=2, ensure_ascii=False)
-
-    # Sort live results by engagement before formatting
-    all_results.sort(key=lambda p: (p.get("score", 0) or 0) + (p.get("num_comments", 0) or 0) * 2, reverse=True)
-
-    # Sort comments within each post by score
-    for p in all_results:
-        if p.get("comments"):
-            p["comments"].sort(key=lambda c: c.get("score", 0) or 0, reverse=True)
-
-    formatted = _format_reddit_results([{
-        "title": _clean_text(p.get("title", "")),
-        "flair": p.get("flair", ""),
-        "selftext": _clean_text(p.get("selftext", "")),
-        "url": p.get("url", ""),
-        "post_score": p.get("score", 0) or 0,
-        "num_comments": p.get("num_comments", 0) or 0,
-        "comments": [
-            {"body": _clean_text(c.get("body", "")), "score": c.get("score", 0) or 0}
-            for c in (p.get("comments") or [])
-        ],
-    } for p in all_results], query)
-
-    return (
-        f"Live Reddit scraping complete. {new_count} new post(s) added to the database.\n\n"
-        + formatted
-        + "\n\nNote: This tool may take 1-2 minutes to run and will update the Reddit database for future searches."
-    )
-
-
-@tool
 def search_reddit(query: str, limit: int = 10) -> str:
     """
     Search r/UFL Reddit posts and comments for relevant information about UF courses,
@@ -403,7 +343,6 @@ def search_reddit(query: str, limit: int = 10) -> str:
     - Whenever a Reddit post is mentioned or referenced in the response, ALWAYS include the Reddit post URL.
     - When a user asks about Reddit replies for a course or topic, return MULTIPLE posts with SHORT summaries, unless only one post is most relevant.
     - Use the Reddit posts and comments as evidence to offer genuine advice and recommendations to the student — don't just summarize, actually help them make decisions based on the collective student experience.
-    - This tool searches the cached Reddit database. Use live_scrape_reddit for the most up-to-date posts.
 
     Args:
         query: Course code, professor name, major, or topic keyword (e.g. "COP3530", "Dr. Smith", "Computer Science major", "registration").
