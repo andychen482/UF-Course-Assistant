@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Filter UFL_master.json to keep only posts relevant to courses, scheduling,
-and graduation.
+Filter the Reddit SQLite database to keep only posts relevant to courses,
+scheduling, and graduation.
 
 Keeps posts that:
   1. Have a target flair (Classes, Schedule, Graduation)
@@ -10,20 +10,17 @@ Keeps posts that:
 
 Usage:
   python filter_posts.py                  # dry run — shows what would be removed
-  python filter_posts.py --apply          # actually filter (backs up original first)
-  python filter_posts.py --master X.json  # custom master path
+  python filter_posts.py --apply          # actually filter
+  python filter_posts.py --db X.db        # custom DB path
 """
 
-import json
 import re
-import os
 import sys
-import shutil
 import logging
 import argparse
 from datetime import datetime
 
-DEFAULT_MASTER = os.path.join("reddit_scrapes", "master", "UFL_master.json")
+import reddit_db
 
 # Flairs that are always kept
 TARGET_FLAIRS = {"classes", "schedule", "graduation"}
@@ -100,28 +97,36 @@ def is_relevant(post: dict) -> tuple:
     return False, None
 
 
-def filter_master(master_path: str, apply: bool = False):
-    if not os.path.exists(master_path):
-        log.error("File not found: %s", master_path)
-        sys.exit(1)
+def filter_master(db_path: str = None, apply: bool = False):
+    reddit_db.init_db(db_path)
+    conn = reddit_db.get_connection(db_path)
 
-    with open(master_path, "r", encoding="utf-8") as fh:
-        master = json.load(fh)
-
-    posts = master.get("posts", {})
+    posts = conn.execute("SELECT id, title, selftext, flair FROM posts").fetchall()
     total = len(posts)
 
-    keep = {}
-    remove = {}
+    keep_ids = []
+    remove_ids = []
     reasons = {}
 
-    for pid, post in posts.items():
-        relevant, reason = is_relevant(post)
+    for post in posts:
+        pid = post["id"]
+        # Fetch comments for relevance check
+        comments = conn.execute(
+            "SELECT body FROM comments WHERE post_id = ?", (pid,)
+        ).fetchall()
+
+        post_dict = {
+            "title": post["title"],
+            "selftext": post["selftext"],
+            "flair": post["flair"],
+            "comments": [{"body": c["body"]} for c in comments],
+        }
+        relevant, reason = is_relevant(post_dict)
         if relevant:
-            keep[pid] = post
+            keep_ids.append(pid)
             reasons[pid] = reason
         else:
-            remove[pid] = post
+            remove_ids.append(pid)
 
     # ── stats ──
     reason_counts: dict = {}
@@ -130,44 +135,35 @@ def filter_master(master_path: str, apply: bool = False):
         reason_counts[bucket] = reason_counts.get(bucket, 0) + 1
 
     log.info("Total posts: %d", total)
-    log.info("Keeping:     %d  (%.1f%%)", len(keep), 100 * len(keep) / max(total, 1))
-    log.info("Removing:    %d  (%.1f%%)", len(remove), 100 * len(remove) / max(total, 1))
+    log.info("Keeping:     %d  (%.1f%%)", len(keep_ids), 100 * len(keep_ids) / max(total, 1))
+    log.info("Removing:    %d  (%.1f%%)", len(remove_ids), 100 * len(remove_ids) / max(total, 1))
     log.info("")
     log.info("Kept-post breakdown:")
     for bucket, cnt in sorted(reason_counts.items(), key=lambda x: -x[1]):
         log.info("  %-14s %d", bucket, cnt)
 
-    if remove:
+    if remove_ids:
         log.info("")
         log.info("Sample removed posts (first 10):")
-        for pid in list(remove.keys())[:10]:
-            p = remove[pid]
-            log.info(
-                "  [%s] flair=%-12s  %s",
-                pid,
-                (p.get("flair") or "—")[:12],
-                (p.get("title") or "")[:65],
-            )
+        sample = remove_ids[:10]
+        for pid in sample:
+            p = conn.execute(
+                "SELECT id, flair, title FROM posts WHERE id = ?", (pid,)
+            ).fetchone()
+            if p:
+                log.info(
+                    "  [%s] flair=%-12s  %s",
+                    p["id"],
+                    (p["flair"] or "-")[:12],
+                    (p["title"] or "")[:65],
+                )
 
     if apply:
-        # Back up original (only first time)
-        backup = master_path + ".pre-filter-backup"
-        if not os.path.exists(backup):
-            shutil.copy2(master_path, backup)
-            log.info("")
-            log.info("Original backed up to %s", backup)
-
-        master["posts"] = keep
-        master["meta"]["last_filtered"] = datetime.utcnow().isoformat()
-        master["meta"]["total_posts"] = len(keep)
-        master["meta"]["removed_by_filter"] = len(remove)
-
-        tmp = master_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(master, fh, indent=2, ensure_ascii=False)
-        os.replace(tmp, master_path)
-
-        log.info("Master filtered and saved: %d posts kept", len(keep))
+        reddit_db.delete_posts(remove_ids, db_path)
+        reddit_db.set_meta("last_filtered", datetime.utcnow().isoformat(), db_path)
+        reddit_db.set_meta("total_posts", str(len(keep_ids)), db_path)
+        reddit_db.set_meta("removed_by_filter", str(len(remove_ids)), db_path)
+        log.info("Database filtered: %d posts kept, %d removed", len(keep_ids), len(remove_ids))
     else:
         log.info("")
         log.info("DRY RUN — no changes made.  Use --apply to write.")
@@ -175,13 +171,13 @@ def filter_master(master_path: str, apply: bool = False):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Filter master JSON for course/schedule/graduation relevance",
+        description="Filter Reddit DB for course/schedule/graduation relevance",
     )
-    ap.add_argument("--master", default=DEFAULT_MASTER, help="Path to master JSON")
+    ap.add_argument("--db", default=None, help="Path to SQLite DB (default: standard location)")
     ap.add_argument("--apply", action="store_true", help="Actually apply the filter")
     args = ap.parse_args()
 
-    filter_master(args.master, apply=args.apply)
+    filter_master(db_path=args.db, apply=args.apply)
 
 
 if __name__ == "__main__":

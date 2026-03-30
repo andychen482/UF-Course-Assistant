@@ -3,15 +3,15 @@
 Exhaustive Reddit scraper — retrieves ALL posts for given flairs with no cap.
 
 Progress is NEVER lost:
-  - Phase 1 saves posts to disk every batch with a resume cursor
+  - Phase 1 saves posts to DB every batch with a resume cursor
   - Phase 2 scans comments in bulk with its own resume cursor
-  - Ctrl-C saves before exit
+  - Ctrl-C commits before exit
 
 Strategy:
   Phase 1: Discover posts via Pullpush (newest-first), client-side flair
-           filter, save to master immediately with resume cursor.
+           filter, save to DB immediately with resume cursor.
   Phase 2: Bulk-fetch ALL subreddit comments from Pullpush, match to posts
-           in master locally. Avoids Reddit 429s entirely.
+           in DB locally. Avoids Reddit 429s entirely.
   --reddit: Optionally supplement with Reddit search for very recent posts.
 
 Usage
@@ -23,13 +23,13 @@ Usage
 """
 
 import requests
-import json
-import os
 import time
 import signal
 import logging
 import argparse
 from datetime import datetime
+
+import reddit_db
 
 # ────────────────────── CONFIG ──────────────────────
 USER_AGENT = "script:ufl-full-scraper:4.0"
@@ -41,9 +41,6 @@ PULLPUSH_DELAY = 1.0           # seconds between Pullpush calls
 PULLPUSH_SUBMISSIONS = "https://api.pullpush.io/reddit/search/submission/"
 PULLPUSH_COMMENTS = "https://api.pullpush.io/reddit/search/comment/"
 PULLPUSH_BATCH = 100
-
-BASE_OUTPUT_DIR = "reddit_scrapes"
-MASTER_DIR = os.path.join(BASE_OUTPUT_DIR, "master")
 # ────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -56,21 +53,20 @@ log = logging.getLogger("reddit_full_scraper")
 
 class RedditFullScraper:
 
-    def __init__(self, subreddit, master_path=None, rate_limit=DEFAULT_RATE_LIMIT,
+    def __init__(self, subreddit, db_path=None, rate_limit=DEFAULT_RATE_LIMIT,
                  pullpush_delay=PULLPUSH_DELAY):
         self.subreddit = subreddit
         self.rate_limit = rate_limit
         self.pp_delay = pullpush_delay
-        self.master_path = master_path or os.path.join(
-            MASTER_DIR, f"{subreddit.upper()}_master.json"
-        )
+        self.db_path = db_path
 
         self.session = requests.Session()
         self.session.headers["User-Agent"] = USER_AGENT
 
-        self.master = self._load_master()
-        self._dirty = False
-        self._saving = False
+        reddit_db.init_db(self.db_path)
+        self._existing_ids = reddit_db.get_all_post_ids(self.db_path)
+        log.info("Loaded DB: %d existing posts", len(self._existing_ids))
+
         self._req_count = 0
         self._shutdown = False
 
@@ -80,31 +76,7 @@ class RedditFullScraper:
             except (OSError, ValueError):
                 pass
 
-    # ── master I/O ───────────────────────────────────
-
-    def _load_master(self):
-        os.makedirs(os.path.dirname(self.master_path), exist_ok=True)
-        if os.path.exists(self.master_path):
-            with open(self.master_path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-            log.info("Loaded master: %d existing posts", len(data.get("posts", {})))
-            return data
-        return {"posts": {}, "meta": {"created": datetime.utcnow().isoformat()}}
-
-    def _save_master(self):
-        if self._saving:
-            return  # prevent re-entrant save from signal handler
-        self._saving = True
-        try:
-            self.master["meta"]["last_updated"] = datetime.utcnow().isoformat()
-            self.master["meta"]["total_posts"] = len(self.master["posts"])
-            tmp = self.master_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(self.master, fh, indent=2, ensure_ascii=False)
-            os.replace(tmp, self.master_path)
-            self._dirty = False
-        finally:
-            self._saving = False
+    # ── signal handling ──────────────────────────────
 
     def _on_signal(self, *_):
         log.warning("Shutdown requested — will exit after current operation …")
@@ -158,19 +130,17 @@ class RedditFullScraper:
             "comments": None,  # filled in Phase 2
         }
 
-    # ── Phase 1: post discovery (saves to disk!) ─────
+    # ── Phase 1: post discovery (saves to DB!) ───────
 
     def _discover_and_save(self, flairs_lower, start_ts, end_ts):
         """
         Pullpush post discovery, newest-first.
-        Saves matched posts to master EVERY BATCH with a resume cursor.
+        Saves matched posts to DB EVERY BATCH with a resume cursor.
         On re-run, resumes from where it left off.
         """
-        existing_ids = set(self.master["posts"].keys())
-
         # Resume support
-        saved_cursor = self.master.get("meta", {}).get("discovery_cursor")
-        if saved_cursor and start_ts < saved_cursor < end_ts:
+        saved_cursor = reddit_db.get_meta("discovery_cursor", self.db_path)
+        if saved_cursor and start_ts < int(saved_cursor) < end_ts:
             cursor = int(saved_cursor)
             log.info("  Resuming from %s (previous run saved cursor)", _ts(cursor))
         else:
@@ -179,6 +149,7 @@ class RedditFullScraper:
         page = 0
         total_scanned = 0
         new_count = 0
+        batch_posts = []
 
         while cursor > start_ts and not self._shutdown:
             page += 1
@@ -201,33 +172,31 @@ class RedditFullScraper:
             if not items:
                 break
 
-            batch_new = 0
             for item in items:
                 pid = item.get("id", "")
                 if not pid:
                     continue
                 total_scanned += 1
 
-                if pid in existing_ids:
+                if pid in self._existing_ids:
                     continue
 
                 flair_text = (item.get("link_flair_text") or "").strip().lower()
                 if flair_text in flairs_lower:
-                    self.master["posts"][pid] = self._norm_post(item)
-                    existing_ids.add(pid)
-                    batch_new += 1
+                    post = self._norm_post(item)
+                    batch_posts.append(post)
+                    self._existing_ids.add(pid)
                     new_count += 1
 
             cursor = int(items[-1].get("created_utc", start_ts))
 
-            # Save cursor + new posts every batch
-            self.master["meta"]["discovery_cursor"] = cursor
-            if batch_new > 0:
-                self._dirty = True
+            # Save cursor every batch
+            reddit_db.set_meta("discovery_cursor", str(cursor), self.db_path)
 
-            # Flush to disk every 5 pages (or when there are new posts)
-            if page % 5 == 0 and self._dirty:
-                self._save_master()
+            # Flush to DB every 5 pages (or when there are new posts)
+            if page % 5 == 0 and batch_posts:
+                reddit_db.upsert_posts_batch(batch_posts, self.db_path)
+                batch_posts = []
 
             if page % 10 == 0:
                 log.info(
@@ -238,81 +207,92 @@ class RedditFullScraper:
             if len(items) < PULLPUSH_BATCH:
                 break
 
+        # Flush remaining
+        if batch_posts:
+            reddit_db.upsert_posts_batch(batch_posts, self.db_path)
+
         # Mark discovery complete if we reached the start
         if cursor <= start_ts and not self._shutdown:
-            self.master["meta"].pop("discovery_cursor", None)
-            self.master["meta"]["discovery_complete"] = True
+            # Clear cursor, mark complete
+            conn = reddit_db.get_connection(self.db_path)
+            conn.execute("DELETE FROM meta WHERE key = 'discovery_cursor'")
+            conn.commit()
+            reddit_db.set_meta("discovery_complete", "true", self.db_path)
             log.info("  Discovery complete: scanned %d, added %d posts", total_scanned, new_count)
         else:
             log.info("  Discovery paused at %s: scanned %d, added %d posts",
                      _ts(cursor), total_scanned, new_count)
 
-        if self._dirty:
-            self._save_master()
+        reddit_db.set_meta("last_updated", datetime.utcnow().isoformat(), self.db_path)
+        reddit_db.set_meta("total_posts", str(reddit_db.get_post_count(self.db_path)), self.db_path)
 
     # ── Phase 2: bulk comment fetch ──────────────────
 
-    def _bulk_fetch_comments(self, start_ts, end_ts):
+    def _bulk_fetch_comments(self, start_ts):
         """
         Scan ALL subreddit comments from Pullpush (not per-post!).
-        Match top-level comments to posts in master by link_id.
+        Match top-level comments to posts in DB by link_id.
 
         Uses comment_cursor for resume.  The scan is only "done" when the
         cursor reaches scan_start — until then, re-runs continue where
         they left off.
         """
-        # Check if a previous scan already completed the full range
-        saved_cursor = self.master.get("meta", {}).get("comment_cursor")
-        scan_complete = self.master.get("meta", {}).get("comment_scan_done", False)
+        conn = reddit_db.get_connection(self.db_path)
+
+        saved_cursor = reddit_db.get_meta("comment_cursor", self.db_path)
+        scan_complete = reddit_db.get_meta("comment_scan_done", self.db_path) == "true"
 
         if scan_complete and not saved_cursor:
-            # Check if new posts were added since the scan finished
-            has_none = any(p.get("comments") is None for p in self.master["posts"].values())
+            # Check if new posts were added since the scan finished (posts with no comments)
+            has_none = conn.execute("""
+                SELECT 1 FROM posts p
+                WHERE NOT EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id)
+                LIMIT 1
+            """).fetchone()
             if not has_none:
                 log.info("  Comment scan already completed — nothing to do.")
-                log.info("  (To force re-scan, delete 'comment_scan_done' from master meta)")
+                log.info("  (To force re-scan, delete 'comment_scan_done' from meta)")
                 return
             else:
-                # New posts added — need a fresh scan
                 log.info("  New posts found since last complete scan — restarting")
                 scan_complete = False
 
-        # Initialise any None comments to [] so we can append
-        for post in self.master["posts"].values():
-            if post.get("comments") is None:
-                post["comments"] = []
-
-        # Build dedup set from all existing comments (prevents doubles)
+        # Build dedup set from all existing comment IDs
         existing_cids = set()
-        for post in self.master["posts"].values():
-            for c in (post.get("comments") or []):
-                if isinstance(c, dict) and c.get("id"):
-                    existing_cids.add(c["id"])
+        for row in conn.execute("SELECT id FROM comments").fetchall():
+            existing_cids.add(row["id"])
 
-        # All post IDs in master (for matching)
-        all_post_ids = set(self.master["posts"].keys())
+        # All post IDs (for matching)
+        all_post_ids = self._existing_ids
 
-        # Time range: cover all posts in master
-        all_times = [p["created_utc"] for p in self.master["posts"].values()]
-        scan_start = max(int(min(all_times)) - 86400, start_ts - 86400)
-        scan_end = int(max(all_times)) + 86400 * 90
+        # Time range: cover all posts in DB
+        time_row = conn.execute(
+            "SELECT MIN(created_utc) as mn, MAX(created_utc) as mx FROM posts"
+        ).fetchone()
+        if not time_row or time_row["mn"] is None:
+            log.info("  No posts in DB — skipping comment scan")
+            return
+
+        scan_start = max(int(time_row["mn"]) - 86400, start_ts - 86400)
+        scan_end = int(time_row["mx"]) + 86400 * 90
         scan_end = min(scan_end, int(datetime.utcnow().timestamp()))
 
         # Resume from saved cursor, or start from the top
-        if saved_cursor and scan_start < saved_cursor < scan_end:
+        if saved_cursor and scan_start < int(saved_cursor) < scan_end:
             cursor = int(saved_cursor)
             log.info("  Resuming comment scan from %s", _ts(cursor))
         else:
             cursor = scan_end
 
         log.info(
-            "  Scanning comments: %s → %s  |  %d posts in master  |  %d comments already stored",
+            "  Scanning comments: %s -> %s  |  %d posts in DB  |  %d comments already stored",
             _ts(cursor), _ts(scan_start), len(all_post_ids), len(existing_cids),
         )
 
         page = 0
         matched = 0
         scanned = 0
+        batch_comments = []
 
         while cursor > scan_start and not self._shutdown:
             page += 1
@@ -343,7 +323,7 @@ class RedditFullScraper:
                 if cid and cid in existing_cids:
                     continue
 
-                # Match to a post in master
+                # Match to a post in DB
                 link_id = (item.get("link_id") or "").replace("t3_", "")
                 if link_id not in all_post_ids:
                     continue
@@ -353,12 +333,9 @@ class RedditFullScraper:
                 if not parent.startswith("t3_"):
                     continue
 
-                post = self.master["posts"][link_id]
-                if not isinstance(post.get("comments"), list):
-                    post["comments"] = []
-
-                post["comments"].append({
+                batch_comments.append({
                     "id": cid,
+                    "post_id": link_id,
                     "author": item.get("author"),
                     "body": item.get("body"),
                     "score": item.get("score"),
@@ -369,11 +346,13 @@ class RedditFullScraper:
                 matched += 1
 
             cursor = int(items[-1].get("created_utc", scan_start))
-            self.master["meta"]["comment_cursor"] = cursor
-            self._dirty = True
+            reddit_db.set_meta("comment_cursor", str(cursor), self.db_path)
 
             if page % 100 == 0:
-                self._save_master()
+                # Flush comments batch
+                if batch_comments:
+                    self._flush_comments(batch_comments)
+                    batch_comments = []
                 log.info(
                     "  scanned %dk comments | matched %d | at %s",
                     scanned // 1000, matched, _ts(cursor),
@@ -382,24 +361,42 @@ class RedditFullScraper:
             if len(items) < 100:
                 break
 
+        # Flush remaining
+        if batch_comments:
+            self._flush_comments(batch_comments)
+
         # Done?
         if cursor <= scan_start and not self._shutdown:
-            self.master["meta"].pop("comment_cursor", None)
-            self.master["meta"]["comment_scan_done"] = True
+            conn.execute("DELETE FROM meta WHERE key = 'comment_cursor'")
+            conn.commit()
+            reddit_db.set_meta("comment_scan_done", "true", self.db_path)
             log.info("  Comment scan COMPLETE: %d matched from %d scanned", matched, scanned)
         else:
-            # Scan is NOT done — cursor saved for resume
             log.info("  Comment scan paused at %s: %d matched from %d scanned",
                      _ts(cursor), matched, scanned)
             log.info("  Re-run to continue from where it stopped.")
 
-        if self._dirty:
-            self._save_master()
+        reddit_db.set_meta("last_updated", datetime.utcnow().isoformat(), self.db_path)
+        reddit_db.set_meta("total_posts", str(reddit_db.get_post_count(self.db_path)), self.db_path)
+
+    def _flush_comments(self, batch):
+        """Insert a batch of comments into the DB."""
+        conn = reddit_db.get_connection(self.db_path)
+        conn.executemany(
+            """INSERT OR REPLACE INTO comments
+               (id, post_id, parent_comment_id, author, body, score, created_utc)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (c["id"], c["post_id"], None, c["author"],
+                 c.get("body") or "", c.get("score") or 0, c.get("created_utc"))
+                for c in batch
+            ],
+        )
+        conn.commit()
 
     # ── Optional: Reddit search supplement ───────────
 
     def _reddit_supplement(self, flairs):
-        existing_ids = set(self.master["posts"].keys())
         for flair in flairs:
             if self._shutdown:
                 break
@@ -431,14 +428,14 @@ class RedditFullScraper:
                     break
 
             added = 0
+            batch = []
             for pid, post in posts.items():
-                if pid not in existing_ids:
-                    self.master["posts"][pid] = post
-                    existing_ids.add(pid)
+                if pid not in self._existing_ids:
+                    batch.append(post)
+                    self._existing_ids.add(pid)
                     added += 1
-            if added:
-                self._dirty = True
-                self._save_master()
+            if batch:
+                reddit_db.upsert_posts_batch(batch, self.db_path)
             log.info("  '%s': %d from Reddit, %d new", flair, len(posts), added)
 
     # ── main ─────────────────────────────────────────
@@ -454,7 +451,7 @@ class RedditFullScraper:
         flairs_lower = {f.strip().lower() for f in flairs}
 
         log.info("Target flairs: %s", flairs)
-        log.info("Date range: %s → %s (newest first)", _ts(start_ts), _ts(end_ts))
+        log.info("Date range: %s -> %s (newest first)", _ts(start_ts), _ts(end_ts))
 
         # ── Phase 1: discover posts & save immediately ──
         log.info("")
@@ -477,14 +474,14 @@ class RedditFullScraper:
             log.info("=" * 55)
             log.info("  Phase 2: Bulk comment scan  (entire subreddit)")
             log.info("=" * 55)
-            self._bulk_fetch_comments(start_ts, end_ts)
+            self._bulk_fetch_comments(start_ts)
 
+        total = reddit_db.get_post_count(self.db_path)
         log.info("")
-        log.info("─" * 55)
-        log.info("Master: %d total posts", len(self.master["posts"]))
+        log.info("-" * 55)
+        log.info("DB: %d total posts", total)
         log.info("API requests: %d", self._req_count)
-        log.info("File: %s", self.master_path)
-        log.info("─" * 55)
+        log.info("-" * 55)
 
 
 def _ts(epoch):
@@ -508,13 +505,13 @@ def main():
                     help="Skip comment fetching (much faster)")
     ap.add_argument("--reddit", action="store_true",
                     help="Also run Reddit search for recent posts")
-    ap.add_argument("--master", help="Custom master JSON path")
+    ap.add_argument("--db", help="Custom SQLite DB path")
 
     args = ap.parse_args()
 
     scraper = RedditFullScraper(
         subreddit=args.subreddit,
-        master_path=args.master,
+        db_path=args.db,
         rate_limit=args.rate_limit,
         pullpush_delay=args.pullpush_delay,
     )
