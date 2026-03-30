@@ -110,7 +110,7 @@ Each section: `number`, `classNumber`, `sectWeb` (delivery mode), `instructors[]
 ## Important Design Decisions
 
 - **Live UF API:** `course_data.py` always queries `one.ufl.edu` in real time — no local course cache. Static JSON snapshots from the old scraper (`UF_Feb-11-2026_26_spring_clean.json`) are deleted/deprecated.
-- **Hybrid Reddit:** Local `scrapers/reddit_scrapes/master/UFL_master.json` is the primary source; `live_scrape_reddit` tool can pull fresh posts and merge them.
+- **Reddit:** Posts are stored in a SQLite database (`scrapers/reddit_scrapes/master/UFL_reddit.db`) and searched via FTS5 by `tools/reddit_search.py`.
 - **In-memory sessions:** Explicitly not suitable for multi-container deployments. A comment in `sessions.py` calls this out — Redis or DynamoDB is the recommended drop-in replacement.
 - **JWKS rotation recovery:** If a `kid` is missing from the cache, `utils/auth.py` force-refreshes once before failing.
 - **Vulgarity filtering:** `reddit_search.py` applies a compiled regex word-boundary filter before returning Reddit content to the LLM.

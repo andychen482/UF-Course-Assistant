@@ -35,18 +35,38 @@ htmlcov/
 Thumbs.db
 .DS_Store
 
-# Unused scraper artifacts in scrapers/gatorevals/
-scrapers/gatorevals/gatorevals_instructor_names.csv
-scrapers/gatorevals/tableau_response_debug.json
-scrapers/gatorevals/gatorevals_names_checkpoint.json
-scrapers/gatorevals/gatorevals_instructor_names.json
-scrapers/gatorevals/gatorevals_courses_checkpoint.json
-scrapers/gatorevals/gatorevals_checkpoint.json
-scrapers/gatorevals/bootstrap_raw.json
-scrapers/gatorevals/gator_evals_questions.txt
-scrapers/gatorevals/bootstrap_debug.txt
-
 # Build artifacts
 dist/
 build/
 *.egg-info/
+
+# ---------------------------------------------------------------
+# Scraper scripts (CLI-only, not needed at runtime)
+# ---------------------------------------------------------------
+scrapers/filter_posts.py
+scrapers/migrate_json_to_sqlite.py
+scrapers/reddit_flair_scraper.py
+scrapers/reddit_full_scraper.py
+scrapers/run_reddit_scrapes.py
+scrapers/ufcoursecatalog.py
+
+# Reddit scrape artifacts (JSON runs, state, master JSON)
+scrapers/reddit_scrapes/runs/
+scrapers/reddit_scrapes/state/
+scrapers/reddit_scrapes/master/UFL_master.json
+
+# GatorEvals scraper scripts
+scrapers/gatorevals/gatorevals_bulk_scraper.py
+scrapers/gatorevals/gatorevals_course_scraper.py
+scrapers/gatorevals/gatorevals_name_scraper.py
+
+# GatorEvals scraper artifacts (checkpoints, debug, intermediate data)
+scrapers/gatorevals/bootstrap_raw.json
+scrapers/gatorevals/bootstrap_debug.txt
+scrapers/gatorevals/gatorevals_checkpoint.json
+scrapers/gatorevals/gatorevals_courses_checkpoint.json
+scrapers/gatorevals/gatorevals_names_checkpoint.json
+scrapers/gatorevals/gatorevals_instructor_names.csv
+scrapers/gatorevals/gatorevals_instructor_names.json
+scrapers/gatorevals/gator_evals_questions.txt
+scrapers/gatorevals/tableau_response_debug.json

@@ -13,8 +13,6 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from langchain_core.tools import tool
 from tools.course_data import search_by_code, search_by_name
-import requests
-import time
 
 from scrapers import reddit_db
 
@@ -327,127 +325,6 @@ def _format_reddit_results(results: list[dict], query: str) -> str:
 
 
 @tool
-def live_scrape_reddit(query: str, limit: int = 10) -> str:
-    """
-    Live scrape r/UFL for posts/comments relevant to the query (and course name if applicable),
-    add new results to the Reddit database, and return formatted results.
-    Warn users that this may take 1-2 minutes.
-
-    IMPORTANT:
-    - Whenever a Reddit post is mentioned or referenced in the response, ALWAYS include the Reddit post URL.
-    - When a user asks about Reddit replies for a course or topic, return MULTIPLE posts with SHORT summaries (not a long discussion about a single post), unless only one post is most relevant or exactly matches the user's request.
-    - This tool is LIMITED to scraping a MAXIMUM of 10 posts from Reddit per query.
-    - Use the Reddit posts and comments as evidence to offer genuine advice and recommendations to the student — don't just summarize, actually help them make decisions.
-    """
-    expanded = _expand_query(query)
-    all_results = []
-    seen_ids = set()
-    headers = {"User-Agent": "ufl-course-assistant-live-scraper/1.0"}
-
-    # Search for each exact phrase (course code variants, course names, etc.)
-    for phrase in expanded["exact_phrases"]:
-        url = "https://www.reddit.com/r/UFL/search.json"
-        params = {
-            "q": phrase,
-            "restrict_sr": 1,
-            "sort": "relevance",
-            "limit": 10
-        }
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception:
-            continue
-        for c in data.get("data", {}).get("children", []):
-            p = c["data"]
-            pid = p["id"]
-            if pid in seen_ids:
-                continue
-            seen_ids.add(pid)
-            post = {
-                "id": pid,
-                "name": p.get("name"),
-                "title": p.get("title"),
-                "selftext": p.get("selftext"),
-                "author": p.get("author"),
-                "created_utc": p.get("created_utc"),
-                "score": p.get("score"),
-                "num_comments": p.get("num_comments"),
-                "flair": p.get("link_flair_text"),
-                "permalink": p.get("permalink"),
-                "url": p.get("url"),
-                "comments": [],
-                "raw": p
-            }
-            # Fetch top-level comments
-            try:
-                comm_url = f"https://www.reddit.com{p.get('permalink')}.json"
-                comm_resp = requests.get(comm_url, headers=headers, timeout=15)
-                comm_resp.raise_for_status()
-                comm_data = comm_resp.json()
-                if isinstance(comm_data, list) and len(comm_data) > 1:
-                    for node in comm_data[1]["data"]["children"]:
-                        if node.get("kind") == "t1":
-                            d = node["data"]
-                            comment = {
-                                "id": d.get("id"),
-                                "author": d.get("author"),
-                                "body": d.get("body"),
-                                "score": d.get("score"),
-                                "created_utc": d.get("created_utc"),
-                                "replies": []
-                            }
-                            post["comments"].append(comment)
-            except Exception:
-                pass
-            all_results.append(post)
-            if len(all_results) >= limit:
-                break
-        if len(all_results) >= limit:
-            break
-        time.sleep(2)  # avoid rate-limiting
-
-    # --- Merge into SQLite database ---
-    reddit_db.init_db()
-    new_count = 0
-    for post in all_results:
-        if not reddit_db.post_exists(post["id"]):
-            reddit_db.upsert_post(post)
-            new_count += 1
-
-    reddit_db.set_meta("last_updated", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    reddit_db.set_meta("total_posts", str(reddit_db.get_post_count()))
-
-    # Sort live results by engagement before formatting
-    all_results.sort(key=lambda p: (p.get("score", 0) or 0) + (p.get("num_comments", 0) or 0) * 2, reverse=True)
-
-    # Sort comments within each post by score
-    for p in all_results:
-        if p.get("comments"):
-            p["comments"].sort(key=lambda c: c.get("score", 0) or 0, reverse=True)
-
-    formatted = _format_reddit_results([{
-        "title": _clean_text(p.get("title", "")),
-        "flair": p.get("flair", ""),
-        "selftext": _clean_text(p.get("selftext", "")),
-        "url": p.get("url", ""),
-        "post_score": p.get("score", 0) or 0,
-        "num_comments": p.get("num_comments", 0) or 0,
-        "comments": [
-            {"body": _clean_text(c.get("body", "")), "score": c.get("score", 0) or 0}
-            for c in (p.get("comments") or [])
-        ],
-    } for p in all_results], query)
-
-    return (
-        f"Live Reddit scraping complete. {new_count} new post(s) added to the database.\n\n"
-        + formatted
-        + "\n\nNote: This tool may take 1-2 minutes to run and will update the Reddit database for future searches."
-    )
-
-
-@tool
 def search_reddit(query: str, limit: int = 10) -> str:
     """
     Search r/UFL Reddit posts and comments for relevant information about UF courses,
@@ -466,7 +343,6 @@ def search_reddit(query: str, limit: int = 10) -> str:
     - Whenever a Reddit post is mentioned or referenced in the response, ALWAYS include the Reddit post URL.
     - When a user asks about Reddit replies for a course or topic, return MULTIPLE posts with SHORT summaries, unless only one post is most relevant.
     - Use the Reddit posts and comments as evidence to offer genuine advice and recommendations to the student — don't just summarize, actually help them make decisions based on the collective student experience.
-    - This tool searches the cached Reddit database. Use live_scrape_reddit for the most up-to-date posts.
 
     Args:
         query: Course code, professor name, major, or topic keyword (e.g. "COP3530", "Dr. Smith", "Computer Science major", "registration").
