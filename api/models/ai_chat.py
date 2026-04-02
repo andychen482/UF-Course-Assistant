@@ -19,3 +19,26 @@ class ChatRequest(BaseModel):
 class ChatDeleteResponse(BaseModel):
     status: str
     session_id: str
+
+
+class ChatSummary(BaseModel):
+    session_id: str
+    title: str
+    updated_at: str
+
+
+class ChatHistoryResponse(BaseModel):
+    chats: list[ChatSummary]
+
+
+class ChatDetailMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatDetailResponse(BaseModel):
+    session_id: str
+    title: str
+    messages: list[ChatDetailMessage]
+    created_at: str
+    updated_at: str

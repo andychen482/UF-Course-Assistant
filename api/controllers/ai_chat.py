@@ -14,10 +14,23 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
-from api.models.ai_chat import ChatDeleteResponse, ChatRequest
+from api.models.ai_chat import (
+    ChatDeleteResponse,
+    ChatDetailResponse,
+    ChatHistoryResponse,
+    ChatRequest,
+    ChatSummary,
+)
 from tools.course_data import set_request_term
 from tools.scheduler_actions import CLIENT_ACTION_TOOLS
-from utils.sessions import add_message, create_session, delete_session, get_session
+from utils.sessions import (
+    add_message,
+    create_session,
+    delete_session,
+    get_session,
+    get_session_detail,
+    list_sessions,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -30,7 +43,7 @@ def _to_term_code(term: str, year: str) -> str:
     return f"2{year}{sem}"
 
 
-# The running agent instance is injected by the lifespan handler in api/__init__.py.
+# The running agent instance is injected by the lifespan handler in main.py
 agent = None
 
 
@@ -47,11 +60,9 @@ def _resolve_session(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Session not found or expired",
             )
-    else:
-        session_id = create_session(user_sub)
-        messages = get_session(session_id, user_sub)
+        return session_id, messages
 
-    return session_id, messages
+    return create_session(user_sub)
 
 
 async def stream_chat(
@@ -61,7 +72,8 @@ async def stream_chat(
     user_sub: str = user["sub"]
     session_id, messages = _resolve_session(body, user_sub)
 
-    add_message(session_id, "user", body.prompt)
+    add_message(session_id, user_sub, "user", body.prompt)
+    messages.append({"role": "user", "content": body.prompt})
 
     if body.term and body.year:
         term_code = _to_term_code(body.term, body.year)
@@ -124,7 +136,7 @@ async def stream_chat(
         }
         return
 
-    add_message(session_id, "assistant", accumulated)
+    add_message(session_id, user_sub, "assistant", accumulated)
     yield {
         "event": "done",
         "data": json.dumps({"session_id": session_id}),
@@ -142,3 +154,36 @@ def handle_delete_session(
             detail="Session not found",
         )
     return ChatDeleteResponse(status="deleted", session_id=session_id)
+
+
+def get_chat_history(user: dict[str, Any]) -> ChatHistoryResponse:
+    """Return a summary list of all conversations for the authenticated user."""
+    items = list_sessions(user["sub"])
+    chats = [
+        ChatSummary(
+            session_id=item["session_id"],
+            title=item.get("title", "New Chat"),
+            updated_at=item.get("updated_at", ""),
+        )
+        for item in items
+    ]
+    return ChatHistoryResponse(chats=chats)
+
+
+def get_chat_detail_handler(
+    session_id: str, user: dict[str, Any]
+) -> ChatDetailResponse:
+    """Return the full conversation for a specific session."""
+    item = get_session_detail(session_id, user["sub"])
+    if item is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    return ChatDetailResponse(
+        session_id=item["session_id"],
+        title=item.get("title", "New Chat"),
+        messages=item.get("messages", []),
+        created_at=item.get("created_at", ""),
+        updated_at=item.get("updated_at", ""),
+    )
