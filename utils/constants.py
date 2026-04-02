@@ -35,6 +35,7 @@ SESSION_TTL_SECONDS: int = 30 * 60  # 30 minutes
 CHAT_TABLE: str = "ufscheduler-chat"
 USERS_TABLE: str = "ufscheduler-users"
 METRICS_TABLE: str = "ufscheduler-stats"
+AI_CHATS_TABLE: str = "ufscheduler-ai-chats"
 
 MESSAGES_BATCH_SIZE: int = 20
 MESSAGE_MAX_LENGTH: int = 250

@@ -1,81 +1,162 @@
 """
-In-memory conversation session store.
+DynamoDB-backed conversation session store.
 
-Each session is a list of messages bound to an authenticated user's ``sub``
-claim.  Sessions expire after a configurable TTL and are lazily pruned.
+Each session is a row in the ``ufscheduler-ai-chats`` table keyed by
+``(user_sub, session_id)``.  Messages are stored as a list attribute on the
+item, and a human-readable title is auto-generated from the first user
+message.
 
-NOTE: This store lives in process memory, so it only works for
-single-container deployments.  For multi-container ECS services, replace this
-with a Redis- or DynamoDB-backed implementation that exposes the same API.
+This replaces the earlier in-memory store and works across multiple ECS
+tasks without any shared state.
 """
 
 from __future__ import annotations
 
-import time
+import logging
 import uuid
-from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
 
-from utils.constants import SESSION_TTL_SECONDS, INTRO_MESSAGE
+from boto3.dynamodb.conditions import Key
 
+from utils.constants import INTRO_MESSAGE
+from utils.dynamo import ai_chats_table
 
-@dataclass
-class _Session:
-    user_sub: str
-    messages: list[dict[str, str]] = field(default_factory=list)
-    last_active: float = field(default_factory=time.monotonic)
+logger = logging.getLogger("uvicorn.error")
 
-
-_store: dict[str, _Session] = {}
+_TITLE_MAX_LENGTH = 50
 
 
-def _prune_expired() -> None:
-    cutoff = time.monotonic() - SESSION_TTL_SECONDS
-    expired = [sid for sid, s in _store.items() if s.last_active < cutoff]
-    for sid in expired:
-        del _store[sid]
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-def create_session(user_sub: str) -> str:
-    """Create a new session for *user_sub* and return the session id.
-
-    Seeds the conversation with the assistant intro message so the model
-    always has context about its capabilities.
-    """
-    _prune_expired()
+def create_session(user_sub: str) -> tuple[str, list[dict[str, str]]]:
+    """Create a new conversation and return ``(session_id, messages)``."""
     session_id = uuid.uuid4().hex
-    _store[session_id] = _Session(
-        user_sub=user_sub,
-        messages=[{"role": "assistant", "content": INTRO_MESSAGE}],
-    )
-    return session_id
+    now = _now_iso()
+    messages: list[dict[str, str]] = [
+        {"role": "assistant", "content": INTRO_MESSAGE},
+    ]
+    ai_chats_table.put_item(Item={
+        "user_sub": user_sub,
+        "session_id": session_id,
+        "title": "New Chat",
+        "messages": messages,
+        "created_at": now,
+        "updated_at": now,
+    })
+    return session_id, messages
 
 
 def get_session(session_id: str, user_sub: str) -> list[dict[str, str]] | None:
-    """Return the message list for *session_id* if it belongs to *user_sub*.
+    """Return the message list for a session owned by *user_sub*.
 
-    Returns ``None`` when the session does not exist, is expired, or belongs to
-    a different user.
+    Returns ``None`` when the session does not exist or belongs to a
+    different user (the composite key enforces ownership).
     """
-    _prune_expired()
-    session = _store.get(session_id)
-    if session is None or session.user_sub != user_sub:
+    response = ai_chats_table.get_item(
+        Key={"user_sub": user_sub, "session_id": session_id},
+    )
+    item = response.get("Item")
+    if item is None:
         return None
-    session.last_active = time.monotonic()
-    return session.messages
+    return item.get("messages", [])
 
 
-def add_message(session_id: str, role: str, content: str) -> None:
-    """Append a message to the session's conversation history."""
-    session = _store.get(session_id)
-    if session is not None:
-        session.messages.append({"role": role, "content": content})
-        session.last_active = time.monotonic()
+def add_message(session_id: str, user_sub: str, role: str, content: str) -> None:
+    """Append a message and update the timestamp.
+
+    If this is the first user message the title is auto-set from the
+    message content (truncated to *_TITLE_MAX_LENGTH* characters).
+    """
+    now = _now_iso()
+    try:
+        ai_chats_table.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression=(
+                "SET #msgs = list_append(#msgs, :new_msg), "
+                "#upd = :now"
+            ),
+            ExpressionAttributeNames={
+                "#msgs": "messages",
+                "#upd": "updated_at",
+            },
+            ExpressionAttributeValues={
+                ":new_msg": [{"role": role, "content": content}],
+                ":now": now,
+            },
+        )
+    except Exception:
+        logger.exception("Failed to append message to session %s", session_id)
+        return
+
+    if role == "user":
+        _set_title_if_default(session_id, user_sub, content)
+
+
+def _set_title_if_default(
+    session_id: str, user_sub: str, first_message: str
+) -> None:
+    """Set the title only when it is still the placeholder 'New Chat'."""
+    title = first_message.strip().replace("\n", " ")
+    if len(title) > _TITLE_MAX_LENGTH:
+        title = title[:_TITLE_MAX_LENGTH - 1] + "\u2026"
+    try:
+        ai_chats_table.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET #t = :title",
+            ConditionExpression="#t = :default",
+            ExpressionAttributeNames={"#t": "title"},
+            ExpressionAttributeValues={
+                ":title": title,
+                ":default": "New Chat",
+            },
+        )
+    except ai_chats_table.meta.client.exceptions.ConditionalCheckFailedException:
+        pass
+    except Exception:
+        logger.exception("Failed to update title for session %s", session_id)
 
 
 def delete_session(session_id: str, user_sub: str) -> bool:
-    """Delete a session.  Returns ``True`` if it existed and belonged to *user_sub*."""
-    session = _store.get(session_id)
-    if session is None or session.user_sub != user_sub:
-        return False
-    del _store[session_id]
-    return True
+    """Delete a session. Returns ``True`` if it existed."""
+    response = ai_chats_table.delete_item(
+        Key={"user_sub": user_sub, "session_id": session_id},
+        ReturnValues="ALL_OLD",
+    )
+    return "Attributes" in response
+
+
+def list_sessions(user_sub: str) -> list[dict[str, Any]]:
+    """Return summary info for all of a user's conversations.
+
+    Each dict contains ``session_id``, ``title``, and ``updated_at``.
+    Results are sorted newest-first by ``updated_at``.
+    """
+    response = ai_chats_table.query(
+        KeyConditionExpression=Key("user_sub").eq(user_sub),
+        ProjectionExpression="session_id, title, updated_at",
+    )
+    items: list[dict[str, Any]] = response.get("Items", [])
+
+    while response.get("LastEvaluatedKey"):
+        response = ai_chats_table.query(
+            KeyConditionExpression=Key("user_sub").eq(user_sub),
+            ProjectionExpression="session_id, title, updated_at",
+            ExclusiveStartKey=response["LastEvaluatedKey"],
+        )
+        items.extend(response.get("Items", []))
+
+    items.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    return items
+
+
+def get_session_detail(
+    session_id: str, user_sub: str
+) -> dict[str, Any] | None:
+    """Return the full conversation item (including messages) or ``None``."""
+    response = ai_chats_table.get_item(
+        Key={"user_sub": user_sub, "session_id": session_id},
+    )
+    return response.get("Item")
