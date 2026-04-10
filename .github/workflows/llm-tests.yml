@@ -17,6 +17,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# publish-unit-test-result-action needs write access to post the results
+# comment / check on the PR.
+permissions:
+  checks: write
+  pull-requests: write
+
 jobs:
   test:
     name: Run LLM Tool-Call Tests
@@ -41,7 +47,7 @@ jobs:
       # ── 3. Run tests ────────────────────────────────────────────────────────
       # --tb=short    concise tracebacks (full ones get noisy in CI logs)
       # --junit-xml   machine-readable results -- used by the next step to
-      #               annotate failed tests inline on the PR / commit page
+      #               show pass/fail counts on the PR
       - name: Run LLM tool-call tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -54,14 +60,13 @@ jobs:
             --junit-xml=test-results.xml
 
       # ── 4. Publish results ──────────────────────────────────────────────────
-      # Parses the JUnit XML and adds per-test pass/fail annotations directly
-      # on the PR diff and the commit check summary page.
-      # Runs even when the test step fails so you always see which tests broke.
+      # Posts a comment on the PR showing passed/failed counts per test, and
+      # adds a check annotation for each failure. Runs even when tests fail.
       - name: Publish test results
-        uses: dorny/test-reporter@v1
+        uses: EnricoMi/publish-unit-test-result-action@v2
         if: always()
         with:
-          name: LLM Tool-Call Results
-          path: test-results.xml
-          reporter: java-junit
-          fail-on-error: true
+          files: test-results.xml
+          check_name: LLM Tool-Call Results
+          comment_title: LLM Tool-Call Test Results
+          fail_on: test failures
