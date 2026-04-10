@@ -23,10 +23,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30        # hard ceiling -- runaway LLM calls won't bill forever
 
-    defaults:
-      run:
-        working-directory: UF-Course-Assistant
-
     steps:
       # ── 1. Source code ──────────────────────────────────────────────────────
       - name: Checkout repository
@@ -66,6 +62,6 @@ jobs:
         if: always()
         with:
           name: LLM Tool-Call Results
-          path: UF-Course-Assistant/test-results.xml
+          path: test-results.xml
           reporter: java-junit
           fail-on-error: true
