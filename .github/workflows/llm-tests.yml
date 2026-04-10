@@ -1,0 +1,71 @@
+name: LLM Tool-Call Tests
+
+# Triggers
+# --------
+# - Push to main: catches anything merged to the default branch.
+# - Pull requests: results appear as a required / optional check on the PR.
+# - workflow_dispatch: lets you kick off a run manually from the Actions tab
+#   without pushing code (useful for debugging or one-off checks).
+#
+# Deliberately NOT triggered on every branch push to avoid burning OpenAI
+# credits for every WIP commit. Add "push: branches: ['**']" here if you
+# want that behaviour.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run LLM Tool-Call Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30        # hard ceiling -- runaway LLM calls won't bill forever
+
+    defaults:
+      run:
+        working-directory: UF-Course-Assistant
+
+    steps:
+      # ── 1. Source code ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python environment ───────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip              # re-use the pip cache across runs for speed
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+
+      # ── 3. Run tests ────────────────────────────────────────────────────────
+      # --tb=short    concise tracebacks (full ones get noisy in CI logs)
+      # --junit-xml   machine-readable results -- used by the next step to
+      #               annotate failed tests inline on the PR / commit page
+      - name: Run LLM tool-call tests
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Required by utils/constants.py at import time
+          ALLOWED_ORIGINS: "http://localhost:3000"
+        run: |
+          pytest tests/test_llm_tool_calls.py \
+            -v \
+            --tb=short \
+            --junit-xml=test-results.xml
+
+      # ── 4. Publish results ──────────────────────────────────────────────────
+      # Parses the JUnit XML and adds per-test pass/fail annotations directly
+      # on the PR diff and the commit check summary page.
+      # Runs even when the test step fails so you always see which tests broke.
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: LLM Tool-Call Results
+          path: UF-Course-Assistant/test-results.xml
+          reporter: java-junit
+          fail-on-error: true
