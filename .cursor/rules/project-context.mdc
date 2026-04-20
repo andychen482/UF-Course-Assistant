@@ -6,43 +6,61 @@ alwaysApply: true
 # UF Scheduling Assistant — Project Context
 
 ## Purpose
-LLM-powered FastAPI microservice that helps UF students research courses. Aggregates data from four sources: UF One.UF Schedule of Courses API (live), RateMyProfessors (GraphQL), r/UFL Reddit posts (local JSON + live scrape), and (planned) GatorEvals.
+LLM-powered FastAPI microservice that helps UF students research courses. Aggregates data from four sources: UF One.UF Schedule of Courses API (live), RateMyProfessors (GraphQL), r/UFL Reddit posts (SQLite FTS5 index), and GatorEvals (offline CSVs). Exposes SSE-based AI chat, a public chat room, user profiles, and usage metrics — all persisted to **Amazon DynamoDB**.
 
 ## Architecture
 
 ```
-main.py                       (FastAPI app + lifespan — uvicorn main:app)
-api/                          (API package)
+main.py                         (FastAPI app + lifespan — uvicorn main:app)
+chat.py                         (build_agent() — LangGraph ReAct agent + tools + CLI loop)
+tui.py                          (Textual-based TUI demo)
+api/                            (API package)
   __init__.py
   routers/
-    __init__.py               (aggregates all sub-routers)
-    health.py                 (GET /health)
-    chat.py                   (POST /chat, DELETE /chat/{session_id})
-    chat_room.py              (SSE events, send/load messages)
-    metrics.py                (POST major/course/search tracking)
-    user.py                   (user routes — stub)
+    __init__.py                 (aggregates all sub-routers)
+    health.py                   (GET /health)
+    ai_chat.py                  (POST /ai-chat, GET history & detail, DELETE session)
+    chat_room.py                (SSE stream, send/load messages)
+    active_users.py             (GET /active-users/stream — unauthenticated SSE)
+    metrics.py                  (POST major/course/search tracking)
+    user.py                     (POST /users/username, GET /users/me)
   controllers/
-    chat.py                   (AI chat business logic, SSE streaming)
-    chat_room.py              (pub/sub chat room, DynamoDB persistence)
-    metrics.py                (daily analytics counters)
-    user.py                   (user management — stub)
+    ai_chat.py                  (AI chat business logic, SSE streaming, tool_call events)
+    chat_room.py                (pub/sub chat room, DynamoDB persistence)
+    active_users.py             (in-memory active-user presence tracking)
+    metrics.py                  (daily analytics counters)
+    user.py                     (user management — DynamoDB ufscheduler-users)
   models/
-    __init__.py               (re-exports all Pydantic models)
-    chat.py                   (ChatRequest, ChatDeleteResponse)
-    health.py                 (HealthResponse)
-    chat_room.py              (SendMessageRequest)
-    metrics.py                (TrackMajorRequest, TrackCourseRequest, …)
-    user.py                   (user models — stub)
-sessions.py                   (in-memory session store keyed by UUID hex)
-chat.py                       (build_agent() — LangGraph ReAct agent + tools)
-  └── tools/                  (@tool-decorated LangChain tool functions)
-        ├── course_search.py → course_data.py (UF SOC live API)
-        ├── rmp_search.py     (RateMyProfessors GraphQL)
-        └── reddit_search.py  (local JSON + live Reddit API)
-utils/auth.py                 (Cognito JWT validation via python-jose)
-constants.py                  (env-driven config)
-dynamo.py                     (DynamoDB table references)
-scrapers/                     (offline ETL — NOT part of the live request path)
+    __init__.py                 (re-exports all Pydantic models)
+    ai_chat.py                  (ChatRequest, ChatDeleteResponse, ChatSummary,
+                                 ChatHistoryResponse, ChatDetailMessage, ChatDetailResponse)
+    health.py                   (HealthResponse)
+    chat_room.py                (SendMessageRequest, ChatMessage, LoadMessagesResponse)
+    metrics.py                  (TrackMajorRequest, TrackCourseRequest, TrackSearchRequest,
+                                 MetricsResponse)
+    user.py                     (SetUsernameRequest, SetUsernameResponse, UserProfile)
+tools/                          (@tool-decorated LangChain tool functions)
+  course_search.py              (UF SOC live API — calls course_data.py)
+  course_data.py                (term auto-detection, One.UF API requests)
+  rmp_search.py                 (RateMyProfessors GraphQL)
+  reddit_search.py              (SQLite FTS5 + vulgarity filter)
+  gatorevals_search.py          (offline CSV lookups from scrapers/gatorevals/)
+  scheduler_actions.py          (CLIENT_ACTION_TOOLS — propose UI actions via tool_call SSE)
+utils/
+  auth.py                       (Cognito JWT validation via PyJWT + PyJWKClient)
+  constants.py                  (env-driven config, table names, hardcoded limits)
+  dynamo.py                     (DynamoDB resource + table handles)
+  sessions.py                   (DynamoDB-backed AI chat session store — ufscheduler-ai-chats)
+scrapers/                       (offline ETL — NOT part of the live request path)
+  ufcoursecatalog.py            (bulk download UF SOC API → _clean.json)
+  reddit_flair_scraper.py       (scrapes r/UFL by flair → UFL_master.json)
+  run_reddit_scrapes.py         (orchestrator: initial / daily modes; state in reddit_scrapes/state/)
+  reddit_db.py                  (SQLite DB helpers for FTS5 Reddit index)
+  gatorevals/                   (GatorEvals scrapers + CSV outputs consumed by gatorevals_search.py)
+  reddit_scrapes/
+    master/UFL_reddit.db        (SQLite FTS5 database — updated nightly by GitHub Action)
+    state/daily_progress.json
+old-server/                     (Legacy Node/Express + Socket.io server — reference only)
 ```
 
 ## API Endpoints
@@ -50,20 +68,26 @@ scrapers/                     (offline ETL — NOT part of the live request path
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | `GET` | `/health` | None | `{"status": "ok"}` |
-| `POST` | `/chat` | Bearer JWT | Accepts `ChatRequest`; returns SSE stream |
-| `DELETE` | `/chat/{session_id}` | Bearer JWT | Deletes a session |
-| `GET` | `/chat-room/events` | Bearer JWT | SSE stream of chat room messages + active users |
-| `POST` | `/chat-room/messages` | Bearer JWT | Send a chat room message |
-| `GET` | `/chat-room/messages` | None | Paginated message history |
+| `GET` | `/active-users/stream` | None | SSE: `active_users` events (in-memory presence) |
+| `POST` | `/ai-chat` | Bearer JWT | Accepts `ChatRequest`; returns SSE stream |
+| `GET` | `/ai-chat/history` | Bearer JWT | List `ChatSummary` objects for the authenticated user |
+| `GET` | `/ai-chat/{session_id}` | Bearer JWT | Full session messages (`ChatDetailResponse`) |
+| `DELETE` | `/ai-chat/{session_id}` | Bearer JWT | Deletes a session from DynamoDB |
+| `GET` | `/chat-room/messages/stream` | Bearer JWT | SSE stream of new chat-room messages |
+| `POST` | `/chat-room/messages` | Bearer JWT | Send a chat-room message (requires username) |
+| `GET` | `/chat-room/messages` | None | Paginated message history (`last_evaluated_key` query param) |
 | `POST` | `/metrics/major` | None | Track major selection |
 | `POST` | `/metrics/course` | None | Track course view |
 | `POST` | `/metrics/search` | None | Track search term |
+| `POST` | `/users/username` | Bearer JWT | Set/update username (unique via GSI) |
+| `GET` | `/users/me` | Bearer JWT | Return user profile from DynamoDB |
 
-SSE event format:
+SSE event format (AI chat on `/ai-chat`):
 ```
-event: token    data: {"token": "...", "session_id": "abc"}
-event: done     data: {"session_id": "abc"}
-event: error    data: {"detail": "..."}
+event: token      data: {"token": "...", "session_id": "abc"}
+event: tool_call  data: {"tool": "...", "args": {...}, "session_id": "abc"}   ← client-action tools only
+event: done       data: {"session_id": "abc"}
+event: error      data: {"detail": "..."}
 ```
 
 ## Key Conventions
@@ -71,36 +95,44 @@ event: error    data: {"detail": "..."}
 - **Thin routes, fat controller:** routers in `api/routers/` are one-liners; all logic lives in `api/controllers/`
 - **`from __future__ import annotations`** in every module
 - **Tool outputs are plain text strings** — not JSON — so the LLM can interpret them directly
-- **Global agent singleton:** `api.controllers.chat.agent` is `None` at import time, set during FastAPI `lifespan`; never re-initialized per request
-- **Lazy session pruning:** `_prune_expired()` runs on every `create_session` / `get_session` call
-- **Sessions scoped to user `sub`** (Cognito subject claim) — a session belongs to one user
+- **Global agent singleton:** `api.controllers.ai_chat.agent` is `None` at import time, set during FastAPI `lifespan`; never re-initialized per request
+- **DynamoDB-backed sessions:** `utils/sessions.py` persists AI chat sessions to the `ufscheduler-ai-chats` table; in-memory sessions are gone
+- **ContextVar for term isolation:** `course_data.set_request_term()` / `course_data.get_term()` use a `contextvars.ContextVar` so concurrent requests see their own semester code
+- **Client-action tools never mutate server state** — `scheduler_actions.py` tools emit `tool_call` SSE events; the frontend confirms the action
 
-## Environment Variables (from `.env` via `constants.py`)
+## Environment Variables (from `.env` via `utils/constants.py`)
 
-| Variable | Purpose |
-|---|---|
-| `OPENAI_API_KEY` | OpenAI key (`gpt-4o-mini`) |
-| `COGNITO_REGION` | AWS region of Cognito user pool |
-| `COGNITO_USER_POOL_ID` | Cognito User Pool ID |
-| `COGNITO_APP_CLIENT_ID` | JWT audience |
-| `ALLOWED_ORIGINS` | Comma-separated CORS origins (default `"*"`) |
+| Variable | Required | Purpose |
+|---|---|---|
+| `OPENAI_API_KEY` | Yes | OpenAI key (`gpt-4o-mini`) |
+| `COGNITO_REGION` | Yes | AWS region of Cognito user pool (also used for boto3) |
+| `COGNITO_USER_POOL_ID` | Yes | Cognito User Pool ID (JWT issuer / JWKS URL) |
+| `COGNITO_APP_CLIENT_ID` | Yes | JWT audience |
+| `ALLOWED_ORIGINS` | **Yes** | Comma-separated CORS origins — **app raises on startup if missing** |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | No | Falls back to `~/.aws/credentials` for local dev |
 
-Hardcoded: `SESSION_TTL_SECONDS = 1800`, `JWKS_TTL_SECONDS = 3600`, UF SOC base URL `https://one.ufl.edu/apix/soc/schedule/`
+Hardcoded in `utils/constants.py`: DynamoDB table names (`ufscheduler-chat`, `ufscheduler-users`, `ufscheduler-stats`, `ufscheduler-ai-chats`), `JWKS_TTL_SECONDS = 3600`, `MESSAGES_BATCH_SIZE`, `MESSAGE_MAX_LENGTH`, UF SOC base URL `https://one.uf.edu/apix/soc/schedule/`.
 
 ## Data Models
 
-**`ChatRequest`** (Pydantic, `api/models/chat.py`):
+**`ChatRequest`** (`api/models/ai_chat.py`):
 ```python
 prompt: str
 session_id: str | None = None
 ```
 
-**`_Session`** (internal dataclass, `sessions.py`):
-```python
-user_sub: str
-messages: list[dict[str, str]]  # {"role": "user"|"assistant", "content": str}
-last_active: float               # time.monotonic()
-```
+**`ChatSummary`** / **`ChatHistoryResponse`** / **`ChatDetailResponse`** — returned by `/ai-chat/history` and `/ai-chat/{session_id}`.
+
+**`SetUsernameRequest`** / **`UserProfile`** (`api/models/user.py`) — username uniqueness enforced via DynamoDB GSI `username-index`.
+
+**DynamoDB document schemas:**
+
+| Table | Key(s) | Key attributes |
+|---|---|---|
+| `ufscheduler-ai-chats` | `user_sub` (PK), `session_id` (SK) | `title`, `messages` (list of `{role, content}`), `created_at`, `updated_at` |
+| `ufscheduler-users` | `sub` (PK) | `username`, `email`, `name`, `profilePic`, `createdAt`; GSI `username-index` |
+| `ufscheduler-chat` | `id` (PK, value `"General"`), timestamp (SK) | `message`, `user`, `timestamp` |
+| `ufscheduler-stats` | `type` (PK), `name` (SK) | `count`, `lastUpdated` |
 
 **UF course dict** keys: `code`, `codeWithSpace`, `name`, `description`, `prerequisites`, `sections[]`  
 Each section: `number`, `classNumber`, `sectWeb` (delivery mode), `instructors[]`, `meetTimes[]`, `credits_min`, `credits_max`, `genEd[]`, `quest[]`, `openSeats`, `waitList`, `courseFee`, `finalExam`, `note`, `deptName`
@@ -109,21 +141,29 @@ Each section: `number`, `classNumber`, `sectWeb` (delivery mode), `instructors[]
 
 ## Important Design Decisions
 
-- **Live UF API:** `course_data.py` always queries `one.ufl.edu` in real time — no local course cache. Static JSON snapshots from the old scraper (`UF_Feb-11-2026_26_spring_clean.json`) are deleted/deprecated.
-- **Reddit:** Posts are stored in a SQLite database (`scrapers/reddit_scrapes/master/UFL_reddit.db`) and searched via FTS5 by `tools/reddit_search.py`.
-- **In-memory sessions:** Explicitly not suitable for multi-container deployments. A comment in `sessions.py` calls this out — Redis or DynamoDB is the recommended drop-in replacement.
+- **Live UF API:** `course_data.py` always queries `one.uf.edu` in real time — no local course cache.
+- **Reddit:** Posts are stored in a SQLite database (`scrapers/reddit_scrapes/master/UFL_reddit.db`) and searched via FTS5 by `tools/reddit_search.py`. The DB is updated nightly by a GitHub Action (`.github/workflows/daily-reddit-scrape.yml`).
+- **GatorEvals:** Implemented — `tools/gatorevals_search.py` reads offline CSVs produced by `scrapers/gatorevals/`. Not live-scraped per request.
+- **DynamoDB sessions:** `utils/sessions.py` uses the `ufscheduler-ai-chats` table. Not suitable for multi-container deployments without sharing AWS credentials/region.
+- **In-memory pub/sub:** `chat_room` and `active_users` controllers use in-memory subscriber sets — must be replaced with **Redis** (or similar) before running multiple ECS tasks.
 - **JWKS rotation recovery:** If a `kid` is missing from the cache, `utils/auth.py` force-refreshes once before failing.
 - **Vulgarity filtering:** `reddit_search.py` applies a compiled regex word-boundary filter before returning Reddit content to the LLM.
-- **Term auto-detection:** `course_data.py` maps current month → UF term code (`Spring=1-4`, `Summer=5-7`, `Fall=8-12`) encoded as `2{YY}{sem}` (e.g. Spring 2026 = `"2261"`).
-- **`chat.py` doubles as a CLI:** `main()` provides a terminal loop for quick local testing without running the full API.
+- **Term auto-detection:** `course_data.py` maps current month → UF term code (`Spring=1-4`, `Summer=5-7`, `Fall=8-12`) encoded as `2{YY}{sem}` (e.g. Spring 2026 = `"2261"`). Per-request isolation via `ContextVar`.
+- **`chat.py` doubles as a CLI:** `main()` provides a terminal loop for quick local testing without running the full API. `tui.py` provides a richer Textual TUI.
+- **Auth library:** `PyJWT` + `PyJWKClient` (not `python-jose`).
+- **Migration from Node:** `old-server/server.js` (Express + Socket.io) is retained as reference; DynamoDB table structure and metrics patterns were ported to the Python controllers.
 
 ## Scrapers (offline ETL — do not modify unless working on data pipeline)
 
 - `scrapers/ufcoursecatalog.py` — bulk download UF SOC API → `_clean.json`
 - `scrapers/reddit_flair_scraper.py` — scrapes r/UFL by flair (Classes, Schedule, Graduation) → `UFL_master.json`
 - `scrapers/run_reddit_scrapes.py` — orchestrator for `initial` (50-day backfill) / `daily` (3-day) modes; tracks state in `reddit_scrapes/state/daily_progress.json`
+- `scrapers/reddit_db.py` — SQLite + FTS5 helpers
+- `scrapers/gatorevals/` — GatorEvals scraper scripts + CSV outputs consumed by `tools/gatorevals_search.py`
 
-## Deployment
+## CI / Deployment
 
-Dockerfile: Python 3.12-slim, port 8000, health check on `/health`, `uvicorn main:app`  
-Makefile targets: `make build`, `make run`, `make run-mount` (dev with volume), `make stop`
+**GitHub Actions:** `.github/workflows/daily-reddit-scrape.yml` runs `python run_reddit_scrapes.py daily` on a cron and commits the updated `UFL_reddit.db` back to the repo.
+
+**Docker:** Python 3.12-slim, port 8000, health check on `/health`, non-root user, `uvicorn main:app --host 0.0.0.0 --port 8000`  
+**Makefile targets:** `make build`, `make run` (docker + `--env-file .env`), `make run-mount` (dev with volume), `make stop`, `make dev` (local uvicorn with `--reload`)
